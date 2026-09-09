@@ -56,7 +56,7 @@ input[type=range]{width:100%;accent-color:var(--s1);margin:2px 0 0}
 .hint{font-size:11.5px;color:var(--text-muted);margin-top:3px;line-height:1.4}
 .split{display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-top:2px}
 table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
-th,td{padding:6px 8px;text-align:right;border-bottom:1px solid var(--line-soft);font-size:13px;white-space:nowrap}
+th,td{padding:6px 7px;text-align:right;border-bottom:1px solid var(--line-soft);font-size:13px;white-space:nowrap}
 th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);font-weight:600;border-bottom:1px solid var(--line)}
 th:first-child,td:first-child{text-align:left}
 tbody tr:hover{background:var(--surface-2)}
@@ -805,7 +805,7 @@ function renderBoard(){
   const rows = V.rows.filter(r=>(boardPos==='ALL'||r.pos===boardPos) &&
     (!boardFilter || r.name.toLowerCase().includes(boardFilter) || (r.team||'').toLowerCase().includes(boardFilter)));
   const selId=+el('player').value;
-  let h=`<thead><tr><th>#</th><th>Player</th><th>Pos</th><th>Age</th><th>Value</th><th>Win-now $</th><th>Dynasty $</th>
+  let h=`<thead><tr><th>#</th><th>Player</th><th>Pos</th><th>Age</th><th>Win-now $</th><th>Dynasty $</th>
      <th>MPG</th><th>GP</th><th>PTS</th><th>REB</th><th>AST</th><th>3PM</th><th>STL</th><th>BLK</th><th>TOV</th>
      <th title="Projected field-goal percentage, and its z-scored impact on the category given the player's attempt volume">FG%</th>
      <th title="Projected free-throw percentage, and its z-scored impact on the category given the player's attempt volume">FT%</th></tr></thead><tbody>`;
@@ -814,15 +814,14 @@ function renderBoard(){
     h+=`<tr data-id="${r.id}" style="cursor:pointer${r.id===selId?';background:var(--surface-2);font-weight:600':''}">
       <td style="color:var(--text-muted)">${r.drafted?r.rank:'—'}</td>
       <td>${r.name} <span style="color:var(--text-muted)">${r.team}</span></td>
-      <td><span class="pill">${r.pos}</span></td><td>${Math.round(r.age)}</td>
-      <td style="color:var(--text-secondary)">${r.v.toFixed(1)}</td>
+      <td><span class="pill">${r.pos}</span></td><td title="Category value ${r.v.toFixed(2)} (win-now ${r.v1.toFixed(2)})">${Math.round(r.age)}</td>
       <td style="color:var(--text-secondary)">${r.priceNow>0?'$'+Math.round(r.priceNow):'—'}</td>
       <td style="font-weight:650">${pd>0?'$'+Math.round(pd):'<span style="color:var(--text-muted)">FA</span>'}</td>
       <td>${fmt(r.mpg)}</td><td>${Math.round(r.gp)}</td>
       <td>${fmt(r.pg.PTS_36)}</td><td>${fmt(r.pg.REB_36)}</td><td>${fmt(r.pg.AST_36)}</td>
       <td>${fmt(r.pg.FG3M_36)}</td><td>${fmt(r.pg.STL_36)}</td><td>${fmt(r.pg.BLK_36)}</td><td>${fmt(r.pg.TOV_36)}</td>
-      <td>${(100*r.r.FG_PCT).toFixed(1)} <span class="${(r.t1.zFG||0)>=0?'pos':'neg'}" style="font-size:11px">${(r.t1.zFG||0)>=0?'+':''}${(r.t1.zFG||0).toFixed(1)}</span></td>
-      <td>${(100*r.r.FT_PCT).toFixed(1)} <span class="${(r.t1.zFT||0)>=0?'pos':'neg'}" style="font-size:11px">${(r.t1.zFT||0)>=0?'+':''}${(r.t1.zFT||0).toFixed(1)}</span></td></tr>`;
+      <td title="${fmt(r.pg.FGA_36)} attempts per game">${(100*r.r.FG_PCT).toFixed(1)}<span class="${(r.t1.zFG||0)>=0?'pos':'neg'}" style="font-size:10.5px;margin-left:4px">${(r.t1.zFG||0)>=0?'+':''}${(r.t1.zFG||0).toFixed(1)}</span></td>
+      <td title="${fmt(r.pg.FTA_36)} attempts per game">${(100*r.r.FT_PCT).toFixed(1)}<span class="${(r.t1.zFT||0)>=0?'pos':'neg'}" style="font-size:10.5px;margin-left:4px">${(r.t1.zFT||0)>=0?'+':''}${(r.t1.zFT||0).toFixed(1)}</span></td></tr>`;
   });
   el('boardTable').innerHTML=h+'</tbody>';
 }
