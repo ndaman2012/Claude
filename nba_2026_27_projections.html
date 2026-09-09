@@ -223,8 +223,17 @@ summary{cursor:pointer;font-size:12.5px;color:var(--text-secondary)}
       </div>
       <div class="row2" style="margin-top:8px">
         <div><label for="w_TOV_36">TOV</label><input type="number" id="w_TOV_36" value="-1" step="0.1"></div>
+        <div><label for="w_FGM_36">FGM</label><input type="number" id="w_FGM_36" value="0" step="0.1"></div>
+      </div>
+      <div class="row2" style="margin-top:8px">
+        <div><label for="w_FGA_36">FGA</label><input type="number" id="w_FGA_36" value="0" step="0.1"></div>
+        <div><label for="w_FTM_36">FTM</label><input type="number" id="w_FTM_36" value="0" step="0.1"></div>
+      </div>
+      <div class="row2" style="margin-top:8px">
+        <div><label for="w_FTA_36">FTA</label><input type="number" id="w_FTA_36" value="0" step="0.1"></div>
         <div></div>
       </div>
+      <div class="hint" style="margin-top:6px">Shooting is scored through makes and attempts in a points league (e.g. FGM&nbsp;+2 / FGA&nbsp;−1), not as a percentage. Leave at 0 if your league ignores them.</div>
     </div>
     <div class="ctl" style="margin-top:12px">
       <div class="ctlhead"><label for="lgDyn">Dynasty weight</label><span class="val" id="lgDynV"></span></div>
@@ -546,7 +555,7 @@ function valuations(){
       const nx = ageForward(r, mpg, age, strength);
       r = nx.r; mpg = nx.mpg; age += 1;
     }
-      return {p, id:p.id, name:p.name, team:p.team, age:p.age+1, gp:m.gp, mpg:m.mpg,
+        return {p, id:p.id, name:p.name, team:p.team, age:p.age+1, gp:m.gp, mpg:m.mpg,
               pg:m.pg, r:m.r, pos:posGroup(m.r), years, t1:years[0]};
     });
     PROJ_KEY = pkey;
@@ -570,7 +579,9 @@ function valuations(){
       const att = k==='FG'? tot.FGA_36 : tot.FTA_36;
       const pc  = k==='FG'? tot.FG_PCT : tot.FT_PCT;
       const imp = att*(pc - base.lg[k]);
-      v += (imp-base.mu[k+'imp'])/base.sd[k+'imp'];
+      const z = (imp-base.mu[k+'imp'])/base.sd[k+'imp'];
+      tot['z'+k] = z;
+      v += z;
     });
     return v;
   };
@@ -594,7 +605,7 @@ function valuations(){
     return {mu,sd,lg};
   };
   const PTSW = {}; Object.assign(PTSW, PTSW_DEF);
-  ['PTS_36','REB_36','AST_36','STL_36','BLK_36','TOV_36','FG3M_36'].forEach(k=>{
+  ['PTS_36','REB_36','AST_36','STL_36','BLK_36','TOV_36','FG3M_36','FGM_36','FGA_36','FTM_36','FTA_36'].forEach(k=>{
     const inp=el('w_'+k); if(inp) PTSW[k]=+inp.value;
   });
 
@@ -795,7 +806,9 @@ function renderBoard(){
     (!boardFilter || r.name.toLowerCase().includes(boardFilter) || (r.team||'').toLowerCase().includes(boardFilter)));
   const selId=+el('player').value;
   let h=`<thead><tr><th>#</th><th>Player</th><th>Pos</th><th>Age</th><th>Value</th><th>Win-now $</th><th>Dynasty $</th>
-     <th>MPG</th><th>GP</th><th>PTS</th><th>REB</th><th>AST</th><th>3PM</th><th>STL</th><th>BLK</th><th>TOV</th></tr></thead><tbody>`;
+     <th>MPG</th><th>GP</th><th>PTS</th><th>REB</th><th>AST</th><th>3PM</th><th>STL</th><th>BLK</th><th>TOV</th>
+     <th title="Projected field-goal percentage, and its z-scored impact on the category given the player's attempt volume">FG%</th>
+     <th title="Projected free-throw percentage, and its z-scored impact on the category given the player's attempt volume">FT%</th></tr></thead><tbody>`;
   rows.slice(0,320).forEach(r=>{
     const p1 = r.priceNow, pd = r.price;
     h+=`<tr data-id="${r.id}" style="cursor:pointer${r.id===selId?';background:var(--surface-2);font-weight:600':''}">
@@ -807,20 +820,23 @@ function renderBoard(){
       <td style="font-weight:650">${pd>0?'$'+Math.round(pd):'<span style="color:var(--text-muted)">FA</span>'}</td>
       <td>${fmt(r.mpg)}</td><td>${Math.round(r.gp)}</td>
       <td>${fmt(r.pg.PTS_36)}</td><td>${fmt(r.pg.REB_36)}</td><td>${fmt(r.pg.AST_36)}</td>
-      <td>${fmt(r.pg.FG3M_36)}</td><td>${fmt(r.pg.STL_36)}</td><td>${fmt(r.pg.BLK_36)}</td><td>${fmt(r.pg.TOV_36)}</td></tr>`;
+      <td>${fmt(r.pg.FG3M_36)}</td><td>${fmt(r.pg.STL_36)}</td><td>${fmt(r.pg.BLK_36)}</td><td>${fmt(r.pg.TOV_36)}</td>
+      <td>${(100*r.r.FG_PCT).toFixed(1)} <span class="${(r.t1.zFG||0)>=0?'pos':'neg'}" style="font-size:11px">${(r.t1.zFG||0)>=0?'+':''}${(r.t1.zFG||0).toFixed(1)}</span></td>
+      <td>${(100*r.r.FT_PCT).toFixed(1)} <span class="${(r.t1.zFT||0)>=0?'pos':'neg'}" style="font-size:11px">${(r.t1.zFT||0)>=0?'+':''}${(r.t1.zFT||0).toFixed(1)}</span></td></tr>`;
   });
   el('boardTable').innerHTML=h+'</tbody>';
 }
 
 function boardCsv(){
   const V=valuations();
-  const head=['Rank','Player','Team','Pos','Age','Value','WinNow$','Dynasty$','MPG','GP','PTS','REB','AST','3PM','STL','BLK','TOV','FG%','FT%'];
+  const head=['Rank','Player','Team','Pos','Age','Value','WinNow$','Dynasty$','MPG','GP','PTS','REB','AST','3PM','STL','BLK','TOV','FG%','FGA/g','FG%impact','FT%','FTA/g','FT%impact'];
   const lines=[head.join(',')];
   V.rows.forEach(r=>lines.push([r.drafted?r.rank:'', '"'+r.name+'"', r.team, r.pos, Math.round(r.age),
     r.v.toFixed(2), Math.round(r.priceNow), Math.round(r.price), r.mpg.toFixed(1), Math.round(r.gp),
     r.pg.PTS_36.toFixed(1), r.pg.REB_36.toFixed(1), r.pg.AST_36.toFixed(1), r.pg.FG3M_36.toFixed(1),
     r.pg.STL_36.toFixed(1), r.pg.BLK_36.toFixed(1), r.pg.TOV_36.toFixed(1),
-    (100*r.r.FG_PCT).toFixed(1), (100*r.r.FT_PCT).toFixed(1)].join(',')));
+    (100*r.r.FG_PCT).toFixed(1), r.pg.FGA_36.toFixed(1), (r.t1.zFG||0).toFixed(2),
+    (100*r.r.FT_PCT).toFixed(1), r.pg.FTA_36.toFixed(1), (r.t1.zFT||0).toFixed(2)].join(',')));
   const blob=new Blob([lines.join('\n')],{type:'text/csv'});
   const a=document.createElement('a');
   a.href=URL.createObjectURL(blob);
@@ -912,7 +928,8 @@ el('player').addEventListener('change',render);
 CTL.forEach(c=>el(c).addEventListener('input',render));
 el('autoMin').addEventListener('change',render);
 const LGCTL=['lgTeams','lgBudget','lgRoster','lgMin','lgFormat','lgDyn','lgHorizon','lgDisc','lgPos',
-  'w_PTS_36','w_REB_36','w_AST_36','w_FG3M_36','w_STL_36','w_BLK_36','w_TOV_36'];
+  'w_PTS_36','w_REB_36','w_AST_36','w_FG3M_36','w_STL_36','w_BLK_36','w_TOV_36',
+  'w_FGM_36','w_FGA_36','w_FTM_36','w_FTA_36'];
 LGCTL.forEach(c=>{ const n=el(c); if(n) n.addEventListener(n.type==='checkbox'||n.tagName==='SELECT'?'change':'input',render); });
 el('boardSearch').addEventListener('input',e=>{ boardFilter=e.target.value.toLowerCase().trim(); renderBoard(); });
 el('csvBtn').addEventListener('click',boardCsv);
