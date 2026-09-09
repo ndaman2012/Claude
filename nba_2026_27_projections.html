@@ -188,6 +188,61 @@ summary{cursor:pointer;font-size:12.5px;color:var(--text-secondary)}
     </div>
     <button class="btn" id="reset">Reset all inputs</button>
   </div>
+
+  <div class="card">
+    <h2>League &amp; auction</h2>
+    <div class="row2">
+      <div><label for="lgTeams">Teams</label><input type="number" id="lgTeams" value="9" min="4" max="20" step="1"></div>
+      <div><label for="lgBudget">Budget / team ($)</label><input type="number" id="lgBudget" value="180" min="10" max="1000" step="5"></div>
+    </div>
+    <div class="row2" style="margin-top:10px">
+      <div><label for="lgRoster">Roster spots</label><input type="number" id="lgRoster" value="13" min="5" max="25" step="1"></div>
+      <div><label for="lgMin">Min bid ($)</label><input type="number" id="lgMin" value="1" min="0" max="10" step="1"></div>
+    </div>
+    <div class="ctl" style="margin-top:12px">
+      <label for="lgFormat">Scoring format</label>
+      <select id="lgFormat">
+        <option value="cat9">9-category (roto z-score)</option>
+        <option value="cat8">8-category (no turnovers)</option>
+        <option value="pts">Points league</option>
+      </select>
+    </div>
+    <div id="ptsWeights" hidden>
+      <div class="hint" style="margin-bottom:6px">Points per stat</div>
+      <div class="row2">
+        <div><label for="w_PTS_36">PTS</label><input type="number" id="w_PTS_36" value="1" step="0.1"></div>
+        <div><label for="w_REB_36">REB</label><input type="number" id="w_REB_36" value="1.2" step="0.1"></div>
+      </div>
+      <div class="row2" style="margin-top:8px">
+        <div><label for="w_AST_36">AST</label><input type="number" id="w_AST_36" value="1.5" step="0.1"></div>
+        <div><label for="w_FG3M_36">3PM</label><input type="number" id="w_FG3M_36" value="0.5" step="0.1"></div>
+      </div>
+      <div class="row2" style="margin-top:8px">
+        <div><label for="w_STL_36">STL</label><input type="number" id="w_STL_36" value="3" step="0.1"></div>
+        <div><label for="w_BLK_36">BLK</label><input type="number" id="w_BLK_36" value="3" step="0.1"></div>
+      </div>
+      <div class="row2" style="margin-top:8px">
+        <div><label for="w_TOV_36">TOV</label><input type="number" id="w_TOV_36" value="-1" step="0.1"></div>
+        <div></div>
+      </div>
+    </div>
+    <div class="ctl" style="margin-top:12px">
+      <div class="ctlhead"><label for="lgDyn">Dynasty weight</label><span class="val" id="lgDynV"></span></div>
+      <input type="range" id="lgDyn" min="0" max="100" step="5" value="55">
+      <div class="split"><span>Win-now (2026-27 only)</span><span>Full horizon</span></div>
+      <div class="hint">How much of the price is the discounted multi-year outlook rather than next season alone.</div>
+    </div>
+    <div class="ctl">
+      <div class="ctlhead"><label for="lgHorizon">Horizon (seasons)</label><span class="val" id="lgHorizonV"></span></div>
+      <input type="range" id="lgHorizon" min="1" max="6" step="1" value="4">
+    </div>
+    <div class="ctl">
+      <div class="ctlhead"><label for="lgDisc">Annual discount</label><span class="val" id="lgDiscV"></span></div>
+      <input type="range" id="lgDisc" min="0" max="40" step="2" value="18">
+      <div class="hint">Future seasons are aged with the same empirical curve and discounted at this rate.</div>
+    </div>
+    <label class="toggle"><input type="checkbox" id="lgPos" checked> Positional replacement levels (G/W/B)</label>
+  </div>
 </div>
 
 <div>
@@ -220,6 +275,23 @@ summary{cursor:pointer;font-size:12.5px;color:var(--text-secondary)}
     <h2>Most similar historical seasons</h2>
     <div class="hint" style="margin-bottom:10px">Each comparable is a player-season from 2006-07 → 2023-24 matched on age, minutes, per-36 production, shot diet and efficiency. The model reads what those players did the <em>following</em> season and applies that trajectory to the target.</div>
     <div class="tw"><table id="compTable"></table></div>
+  </div>
+
+
+  <div class="card">
+    <h2>Auction values — full league board</h2>
+    <div id="lgSummary" class="hint" style="margin-bottom:10px"></div>
+    <div class="tabs" style="align-items:center">
+      <button class="tab" data-pos="ALL" aria-pressed="true">All</button>
+      <button class="tab" data-pos="G" aria-pressed="false">Guards</button>
+      <button class="tab" data-pos="W" aria-pressed="false">Wings</button>
+      <button class="tab" data-pos="B" aria-pressed="false">Bigs</button>
+      <span style="flex:1"></span>
+      <input type="text" id="boardSearch" placeholder="Filter board…" style="width:150px">
+      <button class="btn" id="csvBtn">Download CSV</button>
+    </div>
+    <div class="tw" style="max-height:620px;overflow-y:auto"><table id="boardTable"></table></div>
+    <div class="hint" style="margin-top:8px">Click a row to load that player above. Prices sum exactly to the league cap; players outside the draftable pool show as FA.</div>
   </div>
 
   <details class="card">
@@ -285,7 +357,9 @@ function scenarioWeights(comps, wts, q){
   return s>0 ? out.map(v=>v/s) : wts.map(()=>1/wts.length);
 }
 
-function project(p){
+function project(p, neutral){
+  /* neutral=true ignores the per-player context inputs (role, pace, 3P rate and
+     manual minutes) so the rest of the league is valued on model settings only. */
   const ss = p.seasons, last = ss[ss.length-1];
   const lam = S.recency;
   /* ---- historical-average baseline (minute-weighted, recency-decayed) ---- */
@@ -344,7 +418,7 @@ function project(p){
   const models = {hist:{r:hist,mpg:histMpg,gpf:histGpf}, sim:{r:sim,mpg:simMpg,gpf:simGpf}, blend:{r:out,mpg,gpf}};
 
   /* ---- user adjustments applied to every model consistently ---- */
-  const roleF = 1 + S.role/100, paceF = 1 + S.pace/100, threeF = 1 + S.three/100;
+  const roleF = neutral?1:1 + S.role/100, paceF = neutral?1:1 + S.pace/100, threeF = neutral?1:1 + S.three/100;
   Object.values(models).forEach(m=>{
     const r = m.r;
     RATES.forEach(k=>{
@@ -380,7 +454,7 @@ function project(p){
   /* ---- minutes & games ---- */
   const durTilt = 1 + (S.scen-50)/100*0.10;
   Object.values(models).forEach(m=>{ m.gp = clamp(m.gpf*82*durTilt, 1, 82); });
-  if(!S.autoMin){
+  if(!S.autoMin && !neutral){
     Object.values(models).forEach(m=>{ m.mpg = S.mpg; m.gp = S.gp; });
   }
   Object.entries(models).forEach(([key,m])=>{
@@ -388,6 +462,212 @@ function project(p){
     RATES.forEach(k=>{ const v = m.r[k]*m.mpg/36; m.pg[k]=v; m.tot[k]=v*m.gp; });
   });
   return {models, comps, wts, avgAge, ratioUsed, last, mpgRatio};
+}
+
+
+/* ==========================================================================
+   AUCTION VALUATION
+   ========================================================================== */
+const CATS = ['PTS_36','FG3M_36','REB_36','AST_36','STL_36','BLK_36','TOV_36'];
+const CATLABEL = {PTS_36:'PTS',FG3M_36:'3PM',REB_36:'REB',AST_36:'AST',STL_36:'STL',BLK_36:'BLK',TOV_36:'TOV'};
+const PTSW_DEF = {PTS_36:1, REB_36:1.2, AST_36:1.5, STL_36:3, BLK_36:3, TOV_36:-1, FG3M_36:0.5,
+                  FGM_36:0, FGA_36:0, FTM_36:0, FTA_36:0};
+
+/* rough position group from the projected line — the source file has no position
+   column, so it is inferred from role-defining rates */
+function posGroup(r){
+  const ast=r.AST_36, reb=r.REB_36, blk=r.BLK_36, oreb=r.OREB_36;
+  /* rebounding separates the front court most cleanly; offensive boards and blocks
+     break ties for the tall playmakers (Jokic, Sabonis) who out-assist most guards */
+  const big = reb >= 9.0 || (reb >= 7.5 && (blk >= 1.2 || oreb >= 2.2));
+  if(big) return 'B';
+  if(ast >= 4.3 && reb < 6.2) return 'G';
+  return 'W';
+}
+
+/* age a per-36 line forward one season using the empirical curve */
+function ageForward(r, mpg, age, strength){
+  const c = ageCurve(age), out = {};
+  RATES.forEach(k=> out[k] = r[k]*(1 + ((c[k] ?? 1)-1)*strength));
+  PCTS.forEach(k=> out[k] = r[k]);
+  out.FG3M_36 = out.FG3A_36*out.FG3_PCT;
+  out.FTM_36  = out.FTA_36 *out.FT_PCT;
+  out.REB_36  = out.OREB_36 + out.DREB_36;
+  const twoA = Math.max(out.FGA_36-out.FG3A_36,0);
+  const twoPct = clamp((r.FGM_36-r.FG3M_36)/Math.max(r.FGA_36-r.FG3A_36,0.01),0,1);
+  out.FGM_36 = twoA*twoPct + out.FG3M_36;
+  out.FG_PCT = out.FGA_36>0 ? out.FGM_36/out.FGA_36 : 0;
+  out.PTS_36 = 2*(out.FGM_36-out.FG3M_36) + 3*out.FG3M_36 + out.FTM_36;
+  return {r:out, mpg: mpg*(1 + ((c.MPG ?? 1)-1)*strength)};
+}
+
+/* season totals from a per-36 line */
+function totalsOf(r, mpg, gp){
+  const t={}; RATES.forEach(k=> t[k] = r[k]*mpg/36*gp);
+  t.FG_PCT=r.FG_PCT; t.FT_PCT=r.FT_PCT; t.FG3_PCT=r.FG3_PCT; t.GP=gp; t.MIN=mpg*gp;
+  return t;
+}
+
+function leagueSettings(){
+  return {
+    teams:  +el('lgTeams').value,
+    budget: +el('lgBudget').value,
+    roster: +el('lgRoster').value,
+    minBid: +el('lgMin').value,
+    format: el('lgFormat').value,
+    dyn:    +el('lgDyn').value/100,
+    horizon:+el('lgHorizon').value,
+    disc:   +el('lgDisc').value/100,
+    byPos:  el('lgPos').checked
+  };
+}
+
+/* Build every player's season-1 and multi-year value. Returns rows sorted by $. */
+let VAL_CACHE = null, VAL_KEY = '';
+let PROJ_CACHE = null, PROJ_KEY = '';
+function valuations(){
+  const L = leagueSettings();
+  const key = JSON.stringify([S,L]);
+  if(VAL_KEY===key && VAL_CACHE) return VAL_CACHE;
+
+  const selId = +el('player').value;
+  const strength = S.age/100;
+  /* projections only depend on the model inputs + which player is selected,
+     so league/auction settings reuse them */
+  const pkey = JSON.stringify([S, selId, L.horizon]);
+  if(PROJ_KEY!==pkey){
+    PROJ_CACHE = P.map(p=>{
+    const R = project(p, p.id!==selId);        // selected player keeps their context inputs
+    const m = R.models.blend;
+    const years = [];
+    let r = m.r, mpg = m.mpg, age = p.age+1;
+    for(let t=0; t<L.horizon; t++){
+      years.push(totalsOf(r, mpg, m.gp));
+      const nx = ageForward(r, mpg, age, strength);
+      r = nx.r; mpg = nx.mpg; age += 1;
+    }
+      return {p, id:p.id, name:p.name, team:p.team, age:p.age+1, gp:m.gp, mpg:m.mpg,
+              pg:m.pg, r:m.r, pos:posGroup(m.r), years, t1:years[0]};
+    });
+    PROJ_KEY = pkey;
+  }
+  const rows = PROJ_CACHE.map(x=>({...x}));
+
+  /* --- category baselines from the draftable pool (two passes) --- */
+  const N = Math.min(L.teams*L.roster, rows.length);
+  const score = (tot, base) => {
+    if(L.format==='pts'){
+      let v=0; Object.entries(PTSW).forEach(([k,w])=> v += w*(tot[k]||0));
+      return v;
+    }
+    let v=0;
+    CATS.forEach(k=>{
+      if(k==='TOV_36' && L.format==='cat8') return;
+      const z=(tot[k]-base.mu[k])/base.sd[k];
+      v += (k==='TOV_36' ? -z : z);
+    });
+    ['FG','FT'].forEach(k=>{
+      const att = k==='FG'? tot.FGA_36 : tot.FTA_36;
+      const pc  = k==='FG'? tot.FG_PCT : tot.FT_PCT;
+      const imp = att*(pc - base.lg[k]);
+      v += (imp-base.mu[k+'imp'])/base.sd[k+'imp'];
+    });
+    return v;
+  };
+  const baseline = pool => {
+    const mu={}, sd={}, lg={};
+    ['FG','FT'].forEach(k=>{
+      const a=pool.reduce((s,x)=>s+(k==='FG'?x.t1.FGA_36:x.t1.FTA_36),0);
+      const mk=pool.reduce((s,x)=>s+(k==='FG'?x.t1.FGM_36:x.t1.FTM_36),0);
+      lg[k]= a>0? mk/a : 0.45;
+    });
+    CATS.forEach(k=>{
+      const v=pool.map(x=>x.t1[k]);
+      mu[k]=v.reduce((a,b)=>a+b,0)/v.length;
+      sd[k]=Math.sqrt(v.reduce((a,b)=>a+(b-mu[k])**2,0)/v.length)||1;
+    });
+    ['FG','FT'].forEach(k=>{
+      const v=pool.map(x=> (k==='FG'?x.t1.FGA_36:x.t1.FTA_36)*((k==='FG'?x.t1.FG_PCT:x.t1.FT_PCT)-lg[k]));
+      mu[k+'imp']=v.reduce((a,b)=>a+b,0)/v.length;
+      sd[k+'imp']=Math.sqrt(v.reduce((a,b)=>a+(b-mu[k+'imp'])**2,0)/v.length)||1;
+    });
+    return {mu,sd,lg};
+  };
+  const PTSW = {}; Object.assign(PTSW, PTSW_DEF);
+  ['PTS_36','REB_36','AST_36','STL_36','BLK_36','TOV_36','FG3M_36'].forEach(k=>{
+    const inp=el('w_'+k); if(inp) PTSW[k]=+inp.value;
+  });
+
+  let base = baseline(rows);
+  rows.forEach(x=> x.v1 = score(x.t1, base));
+  let top = [...rows].sort((a,b)=>b.v1-a.v1).slice(0,N);
+  base = baseline(top);
+  rows.forEach(x=> x.v1 = score(x.t1, base));
+
+  /* --- multi-year (dynasty) value: discounted future seasons on the same scale --- */
+  rows.forEach(x=>{
+    let num=0, den=0;
+    x.years.forEach((tot,t)=>{
+      const w = Math.pow(1-L.disc, t);
+      num += w*score(tot, base); den += w;
+    });
+    x.vMulti = den>0 ? num/den : x.v1;
+    x.v = (1-L.dyn)*x.v1 + L.dyn*x.vMulti;
+  });
+
+  /* --- dollars: value above replacement, normalised to the exact cap --- */
+  const priced = (list, slots, purse, vKey, priceKey, markDrafted) => {
+    const s=[...list].sort((a,b)=>b[vKey]-a[vKey]);
+    const n=Math.min(slots,s.length);
+    const repl = n>0 ? s[n-1][vKey] : 0;
+    const sumVar = s.slice(0,n).reduce((a,x)=>a+Math.max(x[vKey]-repl,0),0)||1;
+    const pool = Math.max(purse - n*L.minBid, 0);
+    s.forEach((x,i)=>{
+      if(markDrafted){ x.drafted = i<n; x.repl = repl; }
+      x[priceKey] = i<n ? L.minBid + Math.max(x[vKey]-repl,0)*pool/sumVar : 0;
+    });
+  };
+  const purse = L.teams*L.budget;
+  if(L.byPos){
+    /* split roster slots by group in proportion to how the top of the pool skews */
+    /* slots per group follow how the top N of the pool actually breaks down,
+       so the split adapts to the classifier instead of being assumed */
+    const groups = {G:[],W:[],B:[]};
+    rows.forEach(x=>groups[x.pos].push(x));
+    const topN=[...rows].sort((a,b)=>b.v-a.v).slice(0,N);
+    let assigned=0, slotMap={};
+    ['G','W','B'].forEach(g=>{
+      slotMap[g]=Math.min(Math.max(topN.filter(x=>x.pos===g).length,1), groups[g].length);
+      assigned+=slotMap[g];
+    });
+    let fix=N-assigned;
+    while(fix!==0){
+      const g=['G','W','B'].sort((a,b)=>slotMap[b]-slotMap[a])[fix>0?0:0];
+      if(fix>0){ slotMap[g]++; fix--; } else { slotMap[g]--; fix++; }
+    }
+    // purse split by the value actually held in each group's starters
+    const pre={};
+    ['G','W','B'].forEach(g=>{
+      const s=[...groups[g]].sort((a,b)=>b.v-a.v).slice(0,slotMap[g]);
+      const r=s.length?s[s.length-1].v:0;
+      pre[g]=s.reduce((a,x)=>a+Math.max(x.v-r,0),0);
+    });
+    const tot=Object.values(pre).reduce((a,b)=>a+b,0)||1;
+    ['G','W','B'].forEach(g=>{
+      const slots=slotMap[g];
+      const purseG = L.minBid*slots + (purse-N*L.minBid)*pre[g]/tot;
+      priced(groups[g], slots, purseG, 'v',  'price',    true);
+      priced(groups[g], slots, purseG, 'v1', 'priceNow', false);
+    });
+  } else {
+    priced(rows, N, purse, 'v',  'price',    true);
+    priced(rows, N, purse, 'v1', 'priceNow', false);
+  }
+  rows.sort((a,b)=> b.price-a.price || b.v-a.v);
+  rows.forEach((x,i)=> x.rank=i+1);
+  VAL_CACHE = {rows, L, N, purse, base};
+  VAL_KEY = key;
+  return VAL_CACHE;
 }
 
 /* ---------- rendering ---------- */
@@ -465,6 +745,14 @@ function render(){
   const mpgTxt = `${((R.mpgRatio-1)*100>=0?'+':'')}${((R.mpgRatio-1)*100).toFixed(1)}%`;
   el('projNote').textContent = `Similarity column is anchored on the 2025-26 season and moved by the trajectory of the ${Math.round(S.k)} closest comparables (mean similarity ${fmt(R.comps.reduce((s,c)=>s+c.sim,0)/R.comps.length)}). Historical column is a recency- and minute-weighted average of ${p.seasons.length} season${p.seasons.length>1?'s':''} run through the age curve. Minutes and games are the player's own recency-weighted history in every column — comparables set per-36 production only (their collective minutes trajectory would have been ${mpgTxt}, shown for reference).`;
 
+  renderBoard();
+  const me = valuations().rows.find(r=>r.id===p.id);
+  if(me){
+    el('hero').insertAdjacentHTML('afterbegin',
+      `<div class="tile" style="border-color:var(--s3)"><div class="k">Auction value</div>
+       <div class="v">${me.price>0?'$'+Math.round(me.price):'FA'}</div>
+       <div class="d">${me.drafted?`#${me.rank} overall · ${POSNAME[me.pos]}`:'below replacement'} · win-now $${Math.round(me.priceNow)}</div></div>`);
+  }
   renderComps(R);
   renderTrend(p, R);
 }
@@ -481,6 +769,63 @@ function renderComps(R){
       <td>${Math.round(c.gpf*100)}%</td></tr>`;
   });
   el('compTable').innerHTML=h+'</tbody>';
+}
+
+
+/* ---------- auction board ---------- */
+let boardPos='ALL', boardFilter='';
+const POSNAME={G:'Guard',W:'Wing',B:'Big'};
+function renderBoard(){
+  const V = valuations(), L = V.L;
+  el('lgDynV').textContent = L.dyn===0?'Win-now':(L.dyn===1?'Full horizon':Math.round(L.dyn*100)+'% future');
+  el('lgHorizonV').textContent = L.horizon + (L.horizon>1?' seasons':' season');
+  el('lgDiscV').textContent = Math.round(L.disc*100)+'%/yr';
+  el('ptsWeights').hidden = L.format!=='pts';
+
+  const drafted = V.rows.filter(r=>r.drafted);
+  const spend = drafted.reduce((a,r)=>a+r.price,0);
+  el('lgSummary').innerHTML =
+    `${L.teams} teams × $${L.budget} = <strong>$${V.purse.toLocaleString()}</strong> across ${V.N} roster spots ` +
+    `(${L.roster}/team). Allocated $${Math.round(spend).toLocaleString()} · most expensive $${Math.round(drafted[0]?.price||0)} · ` +
+    `replacement level is the ${V.N}th-best ${L.byPos?'player at each position group':'player overall'} · ` +
+    `${L.format==='pts'?'points league':(L.format==='cat8'?'8-cat':'9-cat')} · ` +
+    `${Math.round(L.dyn*100)}% of price from the ${L.horizon}-season outlook.`;
+
+  const rows = V.rows.filter(r=>(boardPos==='ALL'||r.pos===boardPos) &&
+    (!boardFilter || r.name.toLowerCase().includes(boardFilter) || (r.team||'').toLowerCase().includes(boardFilter)));
+  const selId=+el('player').value;
+  let h=`<thead><tr><th>#</th><th>Player</th><th>Pos</th><th>Age</th><th>Value</th><th>Win-now $</th><th>Dynasty $</th>
+     <th>MPG</th><th>GP</th><th>PTS</th><th>REB</th><th>AST</th><th>3PM</th><th>STL</th><th>BLK</th><th>TOV</th></tr></thead><tbody>`;
+  rows.slice(0,320).forEach(r=>{
+    const p1 = r.priceNow, pd = r.price;
+    h+=`<tr data-id="${r.id}" style="cursor:pointer${r.id===selId?';background:var(--surface-2);font-weight:600':''}">
+      <td style="color:var(--text-muted)">${r.drafted?r.rank:'—'}</td>
+      <td>${r.name} <span style="color:var(--text-muted)">${r.team}</span></td>
+      <td><span class="pill">${r.pos}</span></td><td>${Math.round(r.age)}</td>
+      <td style="color:var(--text-secondary)">${r.v.toFixed(1)}</td>
+      <td style="color:var(--text-secondary)">${r.priceNow>0?'$'+Math.round(r.priceNow):'—'}</td>
+      <td style="font-weight:650">${pd>0?'$'+Math.round(pd):'<span style="color:var(--text-muted)">FA</span>'}</td>
+      <td>${fmt(r.mpg)}</td><td>${Math.round(r.gp)}</td>
+      <td>${fmt(r.pg.PTS_36)}</td><td>${fmt(r.pg.REB_36)}</td><td>${fmt(r.pg.AST_36)}</td>
+      <td>${fmt(r.pg.FG3M_36)}</td><td>${fmt(r.pg.STL_36)}</td><td>${fmt(r.pg.BLK_36)}</td><td>${fmt(r.pg.TOV_36)}</td></tr>`;
+  });
+  el('boardTable').innerHTML=h+'</tbody>';
+}
+
+function boardCsv(){
+  const V=valuations();
+  const head=['Rank','Player','Team','Pos','Age','Value','WinNow$','Dynasty$','MPG','GP','PTS','REB','AST','3PM','STL','BLK','TOV','FG%','FT%'];
+  const lines=[head.join(',')];
+  V.rows.forEach(r=>lines.push([r.drafted?r.rank:'', '"'+r.name+'"', r.team, r.pos, Math.round(r.age),
+    r.v.toFixed(2), Math.round(r.priceNow), Math.round(r.price), r.mpg.toFixed(1), Math.round(r.gp),
+    r.pg.PTS_36.toFixed(1), r.pg.REB_36.toFixed(1), r.pg.AST_36.toFixed(1), r.pg.FG3M_36.toFixed(1),
+    r.pg.STL_36.toFixed(1), r.pg.BLK_36.toFixed(1), r.pg.TOV_36.toFixed(1),
+    (100*r.r.FG_PCT).toFixed(1), (100*r.r.FT_PCT).toFixed(1)].join(',')));
+  const blob=new Blob([lines.join('\n')],{type:'text/csv'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='nba_2026_27_auction_values.csv';
+  a.click(); URL.revokeObjectURL(a.href);
 }
 
 /* ---- trend chart ---- */
@@ -566,6 +911,22 @@ el('search').addEventListener('input',e=>{ if(fillPlayers(e.target.value)) rende
 el('player').addEventListener('change',render);
 CTL.forEach(c=>el(c).addEventListener('input',render));
 el('autoMin').addEventListener('change',render);
+const LGCTL=['lgTeams','lgBudget','lgRoster','lgMin','lgFormat','lgDyn','lgHorizon','lgDisc','lgPos',
+  'w_PTS_36','w_REB_36','w_AST_36','w_FG3M_36','w_STL_36','w_BLK_36','w_TOV_36'];
+LGCTL.forEach(c=>{ const n=el(c); if(n) n.addEventListener(n.type==='checkbox'||n.tagName==='SELECT'?'change':'input',render); });
+el('boardSearch').addEventListener('input',e=>{ boardFilter=e.target.value.toLowerCase().trim(); renderBoard(); });
+el('csvBtn').addEventListener('click',boardCsv);
+el('boardTable').addEventListener('click',e=>{
+  const tr=e.target.closest('tr[data-id]'); if(!tr) return;
+  el('search').value=''; fillPlayers('');
+  el('player').value=tr.dataset.id; render();
+  document.querySelector('.hero').scrollIntoView({behavior:'smooth',block:'start'});
+});
+document.querySelectorAll('.tab[data-pos]').forEach(b=>b.addEventListener('click',()=>{
+  boardPos=b.dataset.pos;
+  document.querySelectorAll('.tab[data-pos]').forEach(t=>t.setAttribute('aria-pressed',t===b));
+  renderBoard();
+}));
 el('reset').addEventListener('click',()=>{
   Object.entries(DEF).forEach(([k,v])=>{ if(k==='autoMin') el(k).checked=v; else el(k).value=v; });
   render();
@@ -596,7 +957,10 @@ el('method').innerHTML = `
 <p><strong>Playing time.</strong> Minutes per game and games played are always the player's <em>own</em> recency-weighted three-year history, aged forward by the league's minutes curve — comparables never set them. The comps' collective minutes trajectory is reported under the projection table as context, and the per-comp availability column shows what happened to those players, but neither feeds the projection. Override both directly with the manual inputs.</p>
 <p><strong>Blending.</strong> The blend slider mixes the two per-36 vectors linearly, then every user adjustment (role, pace, 3-point rate, efficiency regression) is applied identically to all three columns so they stay comparable. Points, FG%, TS% and total rebounds are recomputed from the adjusted components rather than scaled directly, so the line always stays internally consistent.</p>
 <p><strong>Scenario slider.</strong> Instead of a symmetric error band, floor and ceiling come from the comparable set's own actual outcomes. Each comp is scored on how its following season went overall (production per minute × minutes × availability), converted to a percentile rank within the comp set, and the comps are then re-weighted with a Gaussian kernel centred on the requested percentile. Because the scenario is chosen at the <em>comparable</em> level rather than stat by stat, a 20th-percentile projection is a coherent picture of what a bad-but-real season looked like for players like this — not fourteen unrelated bad numbers stacked on each other. The 25th-percentile column in the comparables table shows exactly which seasons are driving the current scenario.</p>
-<p><strong>Known limits.</strong> No team-context, contract, draft-class or injury-report data is in the file, so trades, role changes and known injuries are exposed as manual inputs rather than inferred. Rookies entering the league in 2026-27 are not projected. Comparables are drawn from seasons through 2023-24 so that every comp has a real following season on record.</p>`;
+<p><strong>Auction values.</strong> Every player in the pool is projected with the current model settings (the role, pace, 3-point and manual-minutes inputs apply only to the player selected above — the rest of the league is valued on model settings alone), converted to season totals, and scored. In category formats the score is the sum of standardised z-scores for points, threes, rebounds, assists, steals, blocks and turnovers (negated), plus volume-weighted percentage impact for FG% and FT% — attempts × (the player's rate − the pool's rate) — so a 90% free-throw shooter who never gets to the line is not credited like one who shoots eight a game. Baselines are computed over the draftable pool and then recomputed once over the top N, so replacement-level noise does not set the scale. Points leagues use your own per-stat weights instead.</p>
+<p><strong>Dynasty pricing.</strong> The dynasty value is not a fudge factor on age. Each player's projected per-36 line and minutes are aged forward season by season with the same empirical curve, re-scored against fixed year-one baselines, and discounted at the annual rate you set; the dynasty weight then mixes that multi-year average with the win-now season. Both prices are shown side by side so the premium (or discount) on every player is explicit — at a 4-season horizon a 20-year-old typically gains 30-60% over his win-now price while a 34-year-old loses most of his.</p>
+<p><strong>Dollars.</strong> Value above replacement, where replacement is the last draftable player: with ${'$'}{'{'}teams{'}'} teams the pool is teams × budget, the minimum bid is reserved for every roster spot, and the remainder is distributed in proportion to each player's surplus over replacement — so the board always sums to exactly the league cap. With positional replacement on, guards, wings and bigs each get their own replacement level and their own share of the purse, split by how much surplus value each group actually holds; slot counts follow how the top of the pool breaks down rather than a fixed assumption. Position groups are inferred from the projected line (rebounding, offensive rebounds and blocks against assists) because the source file has no position column — check any player whose group looks wrong for your league's eligibility rules.</p>
+<p><strong>Known limits.</strong> No team-context, contract, draft-class or injury-report data is in the file, so trades, role changes and known injuries are exposed as manual inputs rather than inferred. Rookies entering the league in 2026-27 are not projected, so an incoming draft class is missing from the auction board. Position groups are inferred, not official, and no games-played schedule, keeper cost or contract is modelled. Comparables are drawn from seasons through 2023-24 so that every comp has a real following season on record.</p>`;
 
 fillPlayers('');
 const lebron = P.find(p=>/Nikola Jokic|Nikola Jokić/.test(p.name)) || P[0];
