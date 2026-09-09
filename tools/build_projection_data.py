@@ -100,9 +100,10 @@ sch_next=np.array([sched(y+1) for y in hist2.YR])
 gp_frac=np.clip(gp_next/sch_next,0,1)
 gp_frac_cur=np.clip(hist2.GP.values/np.array([sched(y) for y in hist2.YR]),0,1)
 
-# ---- targets: players in 2025-26 ----------------------------------------
-cur=d[(d.YR==2025)&(d.GP>=15)&(d.MIN>=250)].copy().reset_index(drop=True)
-print('targets',len(cur))
+# ---- targets: each player's most recent season (2024-25 or 2025-26) ------
+recent=d[(d.YR>=2024)&(d.GP>=10)&(d.MIN>=200)].copy()
+cur=recent.sort_values('YR').groupby('PLAYER_ID').tail(1).reset_index(drop=True)
+print('targets',len(cur),'from 2025-26:',(cur.YR==2025).sum(),'from 2024-25:',(cur.YR==2024).sum())
 
 TZ=cur[ZF].values
 K_STORE=25
@@ -130,7 +131,8 @@ for i in range(len(cur)):
           'nxt':[round(float(nrows.iloc[j].MPG),1),round(float(nrows.iloc[j].PTS_36),1),round(float(nrows.iloc[j].REB_36),1),round(float(nrows.iloc[j].AST_36),1)]
         })
     # last 3 seasons of the target
-    histrows=d[(d.PLAYER_ID==r.PLAYER_ID)&(d.YR>=2023)&(d.YR<=2025)].sort_values('YR')
+    lastYr=int(r.YR)
+    histrows=d[(d.PLAYER_ID==r.PLAYER_ID)&(d.YR>=lastYr-2)&(d.YR<=lastYr)].sort_values('YR')
     seasons=[]
     for _,h in histrows.iterrows():
         seasons.append({
@@ -142,7 +144,8 @@ for i in range(len(cur)):
         })
     out_players.append({
       'id':int(r.PLAYER_ID),'name':r.PLAYER_NAME,'team':r.TEAM_ABBREVIATION,
-      'age26':round(float(r.AGE)+1,1),'age':round(float(r.AGE),1),
+      'lastYr':lastYr,'gap':2025-lastYr,
+      'age26':round(float(r.AGE)+(2026-lastYr),1),'age':round(float(r.AGE),1),
       'seasons':seasons,'comps':comps
     })
 
