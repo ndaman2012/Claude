@@ -87,6 +87,16 @@ details{margin-top:12px}
 summary{cursor:pointer;font-size:12.5px;color:var(--text-secondary)}
 .toggle{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--text-secondary);cursor:pointer}
 .toggle input{accent-color:var(--s1)}
+.punts{display:flex;flex-wrap:wrap;gap:5px;margin:2px 0 6px}
+.punt{padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:var(--surface-1);
+  color:var(--text-secondary);font-size:12px;cursor:pointer;user-select:none}
+.punt[aria-pressed=true]{background:var(--s8);border-color:var(--s8);color:#fff;text-decoration:line-through}
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{color:var(--text-primary)}
+th .arrow{opacity:.45;font-size:9px;margin-left:2px}
+th[aria-sort] .arrow{opacity:1;color:var(--s1)}
+.filters{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:0 0 10px;font-size:12.5px;color:var(--text-secondary)}
+.filters input[type=number]{width:62px;padding:4px 6px}
 .pill{display:inline-block;padding:1px 7px;border-radius:999px;background:var(--surface-2);
   border:1px solid var(--line);font-size:11px;color:var(--text-secondary)}
 </style>
@@ -202,10 +212,14 @@ summary{cursor:pointer;font-size:12.5px;color:var(--text-secondary)}
     <div class="ctl" style="margin-top:12px">
       <label for="lgFormat">Scoring format</label>
       <select id="lgFormat">
-        <option value="cat9">9-category (roto z-score)</option>
-        <option value="cat8">8-category (no turnovers)</option>
+        <option value="cat9">Category league (roto z-score)</option>
         <option value="pts">Points league</option>
       </select>
+    </div>
+    <div class="ctl" id="puntBox">
+      <label>Punt categories</label>
+      <div class="punts" id="punts"></div>
+      <div class="hint">Punted categories are dropped from every player's value and from the replacement level, so specialists are priced for the build you are actually drafting. Punting turnovers alone is the classic 8-cat setup.</div>
     </div>
     <div id="ptsWeights" hidden>
       <div class="hint" style="margin-bottom:6px">Points per stat</div>
@@ -297,7 +311,17 @@ summary{cursor:pointer;font-size:12.5px;color:var(--text-secondary)}
       <button class="tab" data-pos="B" aria-pressed="false">Bigs</button>
       <span style="flex:1"></span>
       <input type="text" id="boardSearch" placeholder="Filter board…" style="width:150px">
-      <button class="btn" id="csvBtn">Download CSV</button>
+      <button class="btn" id="csvBtn" title="Exports exactly the rows currently shown, in the current sort order">Download CSV</button>
+    </div>
+    <div class="filters">
+      <label class="toggle" style="margin:0"><input type="checkbox" id="fHideFA" checked> Draftable only</label>
+      <span>Max age <input type="number" id="fAge" value="45" min="18" max="45" step="1"></span>
+      <span>Min MPG <input type="number" id="fMpg" value="0" min="0" max="42" step="1"></span>
+      <span>Min GP <input type="number" id="fGp" value="0" min="0" max="82" step="1"></span>
+      <span>$ between <input type="number" id="fMin" value="0" min="0" step="1"> and <input type="number" id="fMax" value="999" min="0" step="1"></span>
+      <button class="btn" id="fClear">Clear filters</button>
+      <span style="flex:1"></span>
+      <span id="boardCount" class="hint" style="margin:0"></span>
     </div>
     <div class="tw" style="max-height:620px;overflow-y:auto"><table id="boardTable"></table></div>
     <div class="hint" style="margin-top:8px">Click a row to load that player above. Prices sum exactly to the league cap; players outside the draftable pool show as FA.</div>
@@ -478,6 +502,9 @@ function project(p, neutral){
    AUCTION VALUATION
    ========================================================================== */
 const CATS = ['PTS_36','FG3M_36','REB_36','AST_36','STL_36','BLK_36','TOV_36'];
+const PUNTS = ['PTS_36','FG3M_36','REB_36','AST_36','STL_36','BLK_36','TOV_36','FG','FT'];
+const PUNTLABEL = {PTS_36:'PTS',FG3M_36:'3PM',REB_36:'REB',AST_36:'AST',STL_36:'STL',BLK_36:'BLK',TOV_36:'TOV',FG:'FG%',FT:'FT%'};
+const puntState = {};
 const CATLABEL = {PTS_36:'PTS',FG3M_36:'3PM',REB_36:'REB',AST_36:'AST',STL_36:'STL',BLK_36:'BLK',TOV_36:'TOV'};
 const PTSW_DEF = {PTS_36:1, REB_36:1.2, AST_36:1.5, STL_36:3, BLK_36:3, TOV_36:-1, FG3M_36:0.5,
                   FGM_36:0, FGA_36:0, FTM_36:0, FTA_36:0};
@@ -524,6 +551,7 @@ function leagueSettings(){
     roster: +el('lgRoster').value,
     minBid: +el('lgMin').value,
     format: el('lgFormat').value,
+    punts: PUNTS.filter(c=>puntState[c]),
     dyn:    +el('lgDyn').value/100,
     horizon:+el('lgHorizon').value,
     disc:   +el('lgDisc').value/100,
@@ -571,7 +599,7 @@ function valuations(){
     }
     let v=0;
     CATS.forEach(k=>{
-      if(k==='TOV_36' && L.format==='cat8') return;
+      if(L.punts.includes(k)) return;
       const z=(tot[k]-base.mu[k])/base.sd[k];
       v += (k==='TOV_36' ? -z : z);
     });
@@ -581,7 +609,7 @@ function valuations(){
       const imp = att*(pc - base.lg[k]);
       const z = (imp-base.mu[k+'imp'])/base.sd[k+'imp'];
       tot['z'+k] = z;
-      v += z;
+      if(!L.punts.includes(k)) v += z;
     });
     return v;
   };
@@ -785,7 +813,48 @@ function renderComps(R){
 
 /* ---------- auction board ---------- */
 let boardPos='ALL', boardFilter='';
+let sortKey='price', sortDir=-1;
+let BOARD_VIEW = [];
 const POSNAME={G:'Guard',W:'Wing',B:'Big'};
+const COLS = [
+  {k:'rank',  label:'#',        get:r=>r.drafted?r.rank:1e9, cell:r=>`<td style="color:var(--text-muted)">${r.drafted?r.rank:'—'}</td>`, dir:1},
+  {k:'name',  label:'Player',   get:r=>r.name.toLowerCase(), dir:1,
+     cell:r=>`<td>${r.name} <span style="color:var(--text-muted)">${r.team}</span></td>`},
+  {k:'pos',   label:'Pos',      get:r=>r.pos, dir:1, cell:r=>`<td><span class="pill">${r.pos}</span></td>`},
+  {k:'age',   label:'Age',      get:r=>r.age, dir:1,
+     cell:r=>`<td title="Category value ${r.v.toFixed(2)} (win-now ${r.v1.toFixed(2)})">${Math.round(r.age)}</td>`},
+  {k:'priceNow', label:'Win-now $', get:r=>r.priceNow, dir:-1,
+     cell:r=>`<td style="color:var(--text-secondary)">${r.priceNow>0?'$'+Math.round(r.priceNow):'—'}</td>`},
+  {k:'price', label:'Dynasty $', get:r=>r.price, dir:-1,
+     cell:r=>`<td style="font-weight:650">${r.price>0?'$'+Math.round(r.price):'<span style="color:var(--text-muted)">FA</span>'}</td>`},
+  {k:'mpg',   label:'MPG',      get:r=>r.mpg, dir:-1, cell:r=>`<td>${fmt(r.mpg)}</td>`},
+  {k:'gp',    label:'GP',       get:r=>r.gp,  dir:-1, cell:r=>`<td>${Math.round(r.gp)}</td>`},
+  {k:'PTS_36',label:'PTS',      get:r=>r.pg.PTS_36,  dir:-1, cell:r=>`<td>${fmt(r.pg.PTS_36)}</td>`},
+  {k:'REB_36',label:'REB',      get:r=>r.pg.REB_36,  dir:-1, cell:r=>`<td>${fmt(r.pg.REB_36)}</td>`},
+  {k:'AST_36',label:'AST',      get:r=>r.pg.AST_36,  dir:-1, cell:r=>`<td>${fmt(r.pg.AST_36)}</td>`},
+  {k:'FG3M_36',label:'3PM',     get:r=>r.pg.FG3M_36, dir:-1, cell:r=>`<td>${fmt(r.pg.FG3M_36)}</td>`},
+  {k:'STL_36',label:'STL',      get:r=>r.pg.STL_36,  dir:-1, cell:r=>`<td>${fmt(r.pg.STL_36)}</td>`},
+  {k:'BLK_36',label:'BLK',      get:r=>r.pg.BLK_36,  dir:-1, cell:r=>`<td>${fmt(r.pg.BLK_36)}</td>`},
+  {k:'TOV_36',label:'TOV',      get:r=>r.pg.TOV_36,  dir:1,  cell:r=>`<td>${fmt(r.pg.TOV_36)}</td>`},
+  {k:'FG',    label:'FG%',      get:r=>r.r.FG_PCT,   dir:-1, punt:'FG',
+     cell:r=>`<td title="${fmt(r.pg.FGA_36)} attempts per game">${(100*r.r.FG_PCT).toFixed(1)}<span class="${(r.t1.zFG||0)>=0?'pos':'neg'}" style="font-size:10.5px;margin-left:4px">${(r.t1.zFG||0)>=0?'+':''}${(r.t1.zFG||0).toFixed(1)}</span></td>`},
+  {k:'FT',    label:'FT%',      get:r=>r.r.FT_PCT,   dir:-1, punt:'FT',
+     cell:r=>`<td title="${fmt(r.pg.FTA_36)} attempts per game">${(100*r.r.FT_PCT).toFixed(1)}<span class="${(r.t1.zFT||0)>=0?'pos':'neg'}" style="font-size:10.5px;margin-left:4px">${(r.t1.zFT||0)>=0?'+':''}${(r.t1.zFT||0).toFixed(1)}</span></td>`}
+];
+const PUNTCOL = {PTS_36:'PTS_36',FG3M_36:'FG3M_36',REB_36:'REB_36',AST_36:'AST_36',STL_36:'STL_36',BLK_36:'BLK_36',TOV_36:'TOV_36',FG:'FG',FT:'FT'};
+
+function renderPunts(){
+  const on = el('lgFormat').value==='cat9';
+  el('puntBox').hidden = !on;
+  el('punts').innerHTML = PUNTS.map(c=>
+    `<button class="punt" data-punt="${c}" aria-pressed="${!!puntState[c]}">${PUNTLABEL[c]}</button>`).join('');
+}
+
+function boardFilters(){
+  return {hideFA:el('fHideFA').checked, maxAge:+el('fAge').value, minMpg:+el('fMpg').value,
+          minGp:+el('fGp').value, min:+el('fMin').value, max:+el('fMax').value};
+}
+
 function renderBoard(){
   const V = valuations(), L = V.L;
   el('lgDynV').textContent = L.dyn===0?'Win-now':(L.dyn===1?'Full horizon':Math.round(L.dyn*100)+'% future');
@@ -795,42 +864,52 @@ function renderBoard(){
 
   const drafted = V.rows.filter(r=>r.drafted);
   const spend = drafted.reduce((a,r)=>a+r.price,0);
+  const puntTxt = L.format==='pts' ? 'points league'
+    : (L.punts.length ? `punting ${L.punts.map(c=>PUNTLABEL[c]).join(', ')} (${9-L.punts.length}-cat)` : '9-cat');
   el('lgSummary').innerHTML =
     `${L.teams} teams × $${L.budget} = <strong>$${V.purse.toLocaleString()}</strong> across ${V.N} roster spots ` +
     `(${L.roster}/team). Allocated $${Math.round(spend).toLocaleString()} · most expensive $${Math.round(drafted[0]?.price||0)} · ` +
     `replacement level is the ${V.N}th-best ${L.byPos?'player at each position group':'player overall'} · ` +
-    `${L.format==='pts'?'points league':(L.format==='cat8'?'8-cat':'9-cat')} · ` +
-    `${Math.round(L.dyn*100)}% of price from the ${L.horizon}-season outlook.`;
+    `<strong>${puntTxt}</strong> · ${Math.round(L.dyn*100)}% of price from the ${L.horizon}-season outlook.`;
 
-  const rows = V.rows.filter(r=>(boardPos==='ALL'||r.pos===boardPos) &&
-    (!boardFilter || r.name.toLowerCase().includes(boardFilter) || (r.team||'').toLowerCase().includes(boardFilter)));
+  const F = boardFilters();
+  let rows = V.rows.filter(r=>
+    (boardPos==='ALL'||r.pos===boardPos) &&
+    (!boardFilter || r.name.toLowerCase().includes(boardFilter) || (r.team||'').toLowerCase().includes(boardFilter)) &&
+    (!F.hideFA || r.drafted) &&
+    r.age <= F.maxAge && r.mpg >= F.minMpg && r.gp >= F.minGp &&
+    r.price >= F.min && r.price <= F.max);
+
+  const col = COLS.find(c=>c.k===sortKey) || COLS.find(c=>c.k==='price');
+  rows.sort((a,b)=>{
+    const x=col.get(a), y=col.get(b);
+    const c = (typeof x==='string') ? x.localeCompare(y) : (x-y);
+    return c*sortDir || b.price-a.price;
+  });
+  el('boardCount').textContent = `${rows.length} shown${rows.length>320?' · first 320 listed':''}`;
+  BOARD_VIEW = rows;
+
+  const punted = new Set(L.format==='cat9'?L.punts:[]);
   const selId=+el('player').value;
-  let h=`<thead><tr><th>#</th><th>Player</th><th>Pos</th><th>Age</th><th>Win-now $</th><th>Dynasty $</th>
-     <th>MPG</th><th>GP</th><th>PTS</th><th>REB</th><th>AST</th><th>3PM</th><th>STL</th><th>BLK</th><th>TOV</th>
-     <th title="Projected field-goal percentage, and its z-scored impact on the category given the player's attempt volume">FG%</th>
-     <th title="Projected free-throw percentage, and its z-scored impact on the category given the player's attempt volume">FT%</th></tr></thead><tbody>`;
+  let h='<thead><tr>' + COLS.map(c=>{
+    const active = c.k===sortKey;
+    const dim = punted.has(PUNTCOL[c.k]) ? ';opacity:.4;text-decoration:line-through' : '';
+    return `<th class="sortable" data-sort="${c.k}"${active?` aria-sort="${sortDir===1?'ascending':'descending'}"`:''}
+      style="${c.k==='name'?'text-align:left':''}${dim}" title="Sort by ${c.label}">${c.label}<span class="arrow">${active?(sortDir===1?'▲':'▼'):'▮'}</span></th>`;
+  }).join('') + '</tr></thead><tbody>';
   rows.slice(0,320).forEach(r=>{
-    const p1 = r.priceNow, pd = r.price;
-    h+=`<tr data-id="${r.id}" style="cursor:pointer${r.id===selId?';background:var(--surface-2);font-weight:600':''}">
-      <td style="color:var(--text-muted)">${r.drafted?r.rank:'—'}</td>
-      <td>${r.name} <span style="color:var(--text-muted)">${r.team}</span></td>
-      <td><span class="pill">${r.pos}</span></td><td title="Category value ${r.v.toFixed(2)} (win-now ${r.v1.toFixed(2)})">${Math.round(r.age)}</td>
-      <td style="color:var(--text-secondary)">${r.priceNow>0?'$'+Math.round(r.priceNow):'—'}</td>
-      <td style="font-weight:650">${pd>0?'$'+Math.round(pd):'<span style="color:var(--text-muted)">FA</span>'}</td>
-      <td>${fmt(r.mpg)}</td><td>${Math.round(r.gp)}</td>
-      <td>${fmt(r.pg.PTS_36)}</td><td>${fmt(r.pg.REB_36)}</td><td>${fmt(r.pg.AST_36)}</td>
-      <td>${fmt(r.pg.FG3M_36)}</td><td>${fmt(r.pg.STL_36)}</td><td>${fmt(r.pg.BLK_36)}</td><td>${fmt(r.pg.TOV_36)}</td>
-      <td title="${fmt(r.pg.FGA_36)} attempts per game">${(100*r.r.FG_PCT).toFixed(1)}<span class="${(r.t1.zFG||0)>=0?'pos':'neg'}" style="font-size:10.5px;margin-left:4px">${(r.t1.zFG||0)>=0?'+':''}${(r.t1.zFG||0).toFixed(1)}</span></td>
-      <td title="${fmt(r.pg.FTA_36)} attempts per game">${(100*r.r.FT_PCT).toFixed(1)}<span class="${(r.t1.zFT||0)>=0?'pos':'neg'}" style="font-size:10.5px;margin-left:4px">${(r.t1.zFT||0)>=0?'+':''}${(r.t1.zFT||0).toFixed(1)}</span></td></tr>`;
+    h+=`<tr data-id="${r.id}" style="cursor:pointer${r.id===selId?';background:var(--surface-2);font-weight:600':''}">`
+     + COLS.map(c=>c.cell(r)).join('') + '</tr>';
   });
   el('boardTable').innerHTML=h+'</tbody>';
 }
 
 function boardCsv(){
   const V=valuations();
+  const view = BOARD_VIEW.length?BOARD_VIEW:V.rows;
   const head=['Rank','Player','Team','Pos','Age','Value','WinNow$','Dynasty$','MPG','GP','PTS','REB','AST','3PM','STL','BLK','TOV','FG%','FGA/g','FG%impact','FT%','FTA/g','FT%impact'];
   const lines=[head.join(',')];
-  V.rows.forEach(r=>lines.push([r.drafted?r.rank:'', '"'+r.name+'"', r.team, r.pos, Math.round(r.age),
+  view.forEach(r=>lines.push([r.drafted?r.rank:'', '"'+r.name+'"', r.team, r.pos, Math.round(r.age),
     r.v.toFixed(2), Math.round(r.priceNow), Math.round(r.price), r.mpg.toFixed(1), Math.round(r.gp),
     r.pg.PTS_36.toFixed(1), r.pg.REB_36.toFixed(1), r.pg.AST_36.toFixed(1), r.pg.FG3M_36.toFixed(1),
     r.pg.STL_36.toFixed(1), r.pg.BLK_36.toFixed(1), r.pg.TOV_36.toFixed(1),
@@ -929,12 +1008,33 @@ el('autoMin').addEventListener('change',render);
 const LGCTL=['lgTeams','lgBudget','lgRoster','lgMin','lgFormat','lgDyn','lgHorizon','lgDisc','lgPos',
   'w_PTS_36','w_REB_36','w_AST_36','w_FG3M_36','w_STL_36','w_BLK_36','w_TOV_36',
   'w_FGM_36','w_FGA_36','w_FTM_36','w_FTA_36'];
-LGCTL.forEach(c=>{ const n=el(c); if(n) n.addEventListener(n.type==='checkbox'||n.tagName==='SELECT'?'change':'input',render); });
+LGCTL.forEach(c=>{ const n=el(c); if(n) n.addEventListener(n.type==='checkbox'||n.tagName==='SELECT'?'change':'input',
+  c==='lgFormat' ? ()=>{renderPunts();render();} : render); });
 el('boardSearch').addEventListener('input',e=>{ boardFilter=e.target.value.toLowerCase().trim(); renderBoard(); });
+['fHideFA','fAge','fMpg','fGp','fMin','fMax'].forEach(id=>
+  el(id).addEventListener(el(id).type==='checkbox'?'change':'input',renderBoard));
+el('fClear').addEventListener('click',()=>{
+  el('fHideFA').checked=true; el('fAge').value=45; el('fMpg').value=0; el('fGp').value=0;
+  el('fMin').value=0; el('fMax').value=999; el('boardSearch').value=''; boardFilter='';
+  boardPos='ALL'; document.querySelectorAll('.tab[data-pos]').forEach(t=>t.setAttribute('aria-pressed',t.dataset.pos==='ALL'));
+  renderBoard();
+});
+el('boardTable').addEventListener('click',e=>{
+  const th=e.target.closest('th[data-sort]'); if(!th) return;
+  const c=COLS.find(x=>x.k===th.dataset.sort);
+  if(sortKey===c.k) sortDir=-sortDir; else { sortKey=c.k; sortDir=c.dir; }
+  renderBoard();
+});
+el('punts').addEventListener('click',e=>{
+  const b=e.target.closest('[data-punt]'); if(!b) return;
+  puntState[b.dataset.punt] = !puntState[b.dataset.punt];
+  renderPunts(); render();
+});
 el('csvBtn').addEventListener('click',boardCsv);
 el('boardTable').addEventListener('click',e=>{
   const tr=e.target.closest('tr[data-id]'); if(!tr) return;
-  el('search').value=''; fillPlayers('');
+  el('search').value=''; renderPunts();
+fillPlayers('');
   el('player').value=tr.dataset.id; render();
   document.querySelector('.hero').scrollIntoView({behavior:'smooth',block:'start'});
 });
@@ -945,6 +1045,7 @@ document.querySelectorAll('.tab[data-pos]').forEach(b=>b.addEventListener('click
 }));
 el('reset').addEventListener('click',()=>{
   Object.entries(DEF).forEach(([k,v])=>{ if(k==='autoMin') el(k).checked=v; else el(k).value=v; });
+  PUNTS.forEach(c=>puntState[c]=false); renderPunts();
   render();
 });
 el('themeBtn').addEventListener('click',()=>{
@@ -974,10 +1075,12 @@ el('method').innerHTML = `
 <p><strong>Blending.</strong> The blend slider mixes the two per-36 vectors linearly, then every user adjustment (role, pace, 3-point rate, efficiency regression) is applied identically to all three columns so they stay comparable. Points, FG%, TS% and total rebounds are recomputed from the adjusted components rather than scaled directly, so the line always stays internally consistent.</p>
 <p><strong>Scenario slider.</strong> Instead of a symmetric error band, floor and ceiling come from the comparable set's own actual outcomes. Each comp is scored on how its following season went overall (production per minute × minutes × availability), converted to a percentile rank within the comp set, and the comps are then re-weighted with a Gaussian kernel centred on the requested percentile. Because the scenario is chosen at the <em>comparable</em> level rather than stat by stat, a 20th-percentile projection is a coherent picture of what a bad-but-real season looked like for players like this — not fourteen unrelated bad numbers stacked on each other. The 25th-percentile column in the comparables table shows exactly which seasons are driving the current scenario.</p>
 <p><strong>Auction values.</strong> Every player in the pool is projected with the current model settings (the role, pace, 3-point and manual-minutes inputs apply only to the player selected above — the rest of the league is valued on model settings alone), converted to season totals, and scored. In category formats the score is the sum of standardised z-scores for points, threes, rebounds, assists, steals, blocks and turnovers (negated), plus volume-weighted percentage impact for FG% and FT% — attempts × (the player's rate − the pool's rate) — so a 90% free-throw shooter who never gets to the line is not credited like one who shoots eight a game. Baselines are computed over the draftable pool and then recomputed once over the top N, so replacement-level noise does not set the scale. Points leagues use your own per-stat weights instead.</p>
+<p><strong>Punting.</strong> A punt toggle removes that category from the value sum for every player <em>and</em> from the replacement level, then re-prices the whole board — it is not a bonus applied to a shortlist. That is what makes specialists come out right: a high-volume big who shoots badly from the line carries a large negative free-throw z-score that suppresses his balanced-build price, and punting FT deletes it, so his rebounds, blocks and field-goal percentage set his price instead. Because the purse is fixed, punting also re-prices everyone else: the players who were carried by the punted category get cheaper, which is the real trade. Punting turnovers on its own is the classic 8-category setup.</p>
 <p><strong>Dynasty pricing.</strong> The dynasty value is not a fudge factor on age. Each player's projected per-36 line and minutes are aged forward season by season with the same empirical curve, re-scored against fixed year-one baselines, and discounted at the annual rate you set; the dynasty weight then mixes that multi-year average with the win-now season. Both prices are shown side by side so the premium (or discount) on every player is explicit — at a 4-season horizon a 20-year-old typically gains 30-60% over his win-now price while a 34-year-old loses most of his.</p>
 <p><strong>Dollars.</strong> Value above replacement, where replacement is the last draftable player: with ${'$'}{'{'}teams{'}'} teams the pool is teams × budget, the minimum bid is reserved for every roster spot, and the remainder is distributed in proportion to each player's surplus over replacement — so the board always sums to exactly the league cap. With positional replacement on, guards, wings and bigs each get their own replacement level and their own share of the purse, split by how much surplus value each group actually holds; slot counts follow how the top of the pool breaks down rather than a fixed assumption. Position groups are inferred from the projected line (rebounding, offensive rebounds and blocks against assists) because the source file has no position column — check any player whose group looks wrong for your league's eligibility rules.</p>
 <p><strong>Known limits.</strong> No team-context, contract, draft-class or injury-report data is in the file, so trades, role changes and known injuries are exposed as manual inputs rather than inferred. Rookies entering the league in 2026-27 are not projected, so an incoming draft class is missing from the auction board. Position groups are inferred, not official, and no games-played schedule, keeper cost or contract is modelled. Comparables are drawn from seasons through 2023-24 so that every comp has a real following season on record.</p>`;
 
+renderPunts();
 fillPlayers('');
 const lebron = P.find(p=>/Nikola Jokic|Nikola Jokić/.test(p.name)) || P[0];
 if(lebron) el('player').value = lebron.id;
