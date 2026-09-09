@@ -264,6 +264,14 @@ th[aria-sort] .arrow{opacity:1;color:var(--s1)}
       <input type="range" id="lgDisc" min="0" max="40" step="2" value="18">
       <div class="hint">Future seasons are aged with the same empirical curve and discounted at this rate.</div>
     </div>
+    <div class="ctl">
+      <label for="lgBasis">Value basis</label>
+      <select id="lgBasis">
+        <option value="gcap">Per-game × games used (games-capped league)</option>
+        <option value="tot">Season totals (no games cap)</option>
+      </select>
+      <div class="hint">With a team games-played cap, games are the scarce resource: a player is worth his games times how much better than replacement he is <em>per game</em>, so missing time costs far less than a totals model implies.</div>
+    </div>
     <label class="toggle"><input type="checkbox" id="lgPos" checked> Positional replacement levels (G/W/B)</label>
   </div>
 </div>
@@ -346,6 +354,33 @@ th[aria-sort] .arrow{opacity:1;color:var(--s1)}
       <button class="btn" id="simRun">Run simulation</button>
     </div>
     <div id="simOut"></div>
+  </div>
+
+
+  <div class="card">
+    <h2>Projected standings — roto, games-capped season</h2>
+    <div class="hint" style="margin-bottom:10px">Every team is filled to a full roster at auction, then the season is played: each team spends its games-played allowance on its best per-game players, category totals are ranked across the league, and roto points are awarded. This is the number that decides the league — the auction values above are only a means to it.</div>
+    <div class="filters">
+      <span>Games cap <input type="number" id="stGames" value="920" min="200" max="1400" step="10"></span>
+      <span>Roster spots <input type="number" id="stSpots" value="16" min="8" max="20" step="1"></span>
+      <span>Cap $<input type="number" id="stCap" value="180" min="50" max="500" step="5"></span>
+      <span>Seasons <input type="number" id="stSims" value="1200" min="100" max="6000" step="100"></span>
+      <span>Your roster <select id="stVariant" style="width:auto;padding:4px 6px">
+        <option value="rec">Simulator's keeps</option>
+        <option value="asis">Keep all contracts</option>
+        <option value="none">Cut everyone</option>
+        <option value="best">Optimised build</option>
+      </select></span>
+      <label class="toggle" style="margin:0"><input type="checkbox" id="stExp" checked> All expiring contracts hit the market</label>
+      <button class="btn" id="stRun">Project standings</button>
+      <button class="btn" id="stCmp">Compare strategies</button>
+      <button class="btn" id="stSearch">Search best build</button>
+      <button class="btn" id="stPunt">Search punt strategy</button>
+    </div>
+    <div id="standOut"></div>
+    <div id="standCompare"></div>
+    <div id="standSearch"></div>
+    <div id="standPunt"></div>
   </div>
 
   <details class="card">
@@ -595,7 +630,8 @@ function leagueSettings(){
     dyn:    +el('lgDyn').value/100,
     horizon:+el('lgHorizon').value,
     disc:   +el('lgDisc').value/100,
-    byPos:  el('lgPos').checked
+    byPos:  el('lgPos').checked,
+    basis:  el('lgBasis').value, gcap: +el('stGames').value, gspots: +el('stSpots').value
   };
 }
 
@@ -678,17 +714,31 @@ function valuations(){
   });
 
   let base = baseline(rows);
-  rows.forEach(x=> x.v1 = score(x.t1, base));
-  let top = [...rows].sort((a,b)=>b.v1-a.v1).slice(0,N);
+  rows.forEach(x=> x.raw1 = score(x.t1, base));
+  let top = [...rows].sort((a,b)=>b.raw1-a.raw1).slice(0,N);
   base = baseline(top);
-  rows.forEach(x=> x.v1 = score(x.t1, base));
+  rows.forEach(x=> x.raw1 = score(x.t1, base));
+
+  /* Under a team games-played cap, games are the scarce resource: what a player
+     is worth is the games he supplies times how much better than replacement he
+     is PER GAME. Without a cap, season totals are the objective directly. */
+  const gamesOf = x => clamp(x.gp, 1, 82);
+  let replPg = 0;
+  if(L.basis==='gcap'){
+    const perGame = [...rows].map(x=>x.raw1/gamesOf(x)).sort((a,b)=>b-a);
+    replPg = perGame[Math.min(N, perGame.length-1)] ?? 0;
+  }
+  const valueOf = (x, totals) => L.basis==='gcap'
+    ? gamesOf(x)*(score(totals, base)/gamesOf(x) - replPg)
+    : score(totals, base);
+  rows.forEach(x=> x.v1 = valueOf(x, x.t1));
 
   /* --- multi-year (dynasty) value: discounted future seasons on the same scale --- */
   rows.forEach(x=>{
     let num=0, den=0;
     x.years.forEach((tot,t)=>{
       const w = Math.pow(1-L.disc, t);
-      num += w*score(tot, base); den += w;
+      num += w*valueOf(x, tot); den += w;
     });
     x.vMulti = den>0 ? num/den : x.v1;
     x.v = (1-L.dyn)*x.v1 + L.dyn*x.vMulti;
@@ -1246,6 +1296,314 @@ function renderSim(){
   }));
 }
 
+
+/* ==========================================================================
+   SEASON SIMULATOR — roto standings under a team games-played cap
+   ========================================================================== */
+const ROTO = [
+  {k:'PTS', get:t=>t.PTS, hi:true},  {k:'3PM', get:t=>t.FG3M, hi:true},
+  {k:'REB', get:t=>t.REB, hi:true},  {k:'AST', get:t=>t.AST, hi:true},
+  {k:'STL', get:t=>t.STL, hi:true},  {k:'BLK', get:t=>t.BLK, hi:true},
+  {k:'TOV', get:t=>t.TOV, hi:false},
+  {k:'FG%', get:t=>t.FGA>0?t.FGM/t.FGA:0, hi:true},
+  {k:'FT%', get:t=>t.FTA>0?t.FTM/t.FTA:0, hi:true}
+];
+/* The league scores every category whatever you decide to punt: a punted
+   category still awards its last-place point to you. Punting is a bet that the
+   points you gain elsewhere outweigh the ones you concede — which is exactly
+   what the standings simulation is here to test, so it always scores all nine. */
+function activeCats(){ return ROTO; }
+
+function standSettings(){
+  return {games:+el('stGames').value, spots:+el('stSpots').value, cap:+el('stCap').value,
+          sims:+el('stSims').value, variant:el('stVariant').value,
+          expToFa:el('stExp').checked};
+}
+
+/* Assign free agents to the teams that have money and spots — a simultaneous
+   auction approximated by repeatedly letting the team with the most money per
+   open spot take the best player it can still afford. */
+function fillLeague(V, C, myRoster, priceNoise){
+  const rosters={}, space={}, need={};
+  LEAGUE.clubs.forEach(c=>{ rosters[c]=[]; space[c]=C.cap; need[c]=C.spots; });
+  const byId=V.byId;
+  LEAGUE.rows.forEach(r=>{
+    if(r.fa || !r.club || r.pid==null) return;
+    const x=byId.get(r.pid); if(!x) return;
+    if(r.s26==null){ if(!C.expToFa && r.club!==LEAGUE.me){ rosters[r.club].push({x,cost:x.est}); space[r.club]-=x.est; need[r.club]--; } return; }
+    if(r.club===LEAGUE.me) return;                     // my roster is set by the variant
+    rosters[r.club].push({x,cost:r.s26}); space[r.club]-=r.s26; need[r.club]--;
+  });
+  myRoster.forEach(o=>{ rosters[LEAGUE.me].push(o); space[LEAGUE.me]-=o.cost; need[LEAGUE.me]--; });
+
+  const taken=new Set();
+  Object.values(rosters).forEach(rs=>rs.forEach(o=>taken.add(o.x.id)));
+  const infl = 1 + (+el('simInfl').value)/100;
+  const pool = V.rows
+    .filter(x=> x.lg && (x.lg.fa || (x.expiring && (C.expToFa || x.club===LEAGUE.me))) && !taken.has(x.id))
+    .map(x=>({x, price: Math.max(1, x.est*infl*(priceNoise? Math.exp(0.22*gauss()-0.024):1))}))
+    .sort((a,b)=>b.x.v-a.x.v);
+
+  for(let guard=0; guard<400; guard++){
+    let team=null, best=-1;
+    LEAGUE.clubs.forEach(c=>{ if(need[c]>0){ const per=(space[c]-(need[c]-1))/need[c]; if(per>best){best=per;team=c;} } });
+    if(!team) break;
+    const budget = space[team]-(need[team]-1);
+    const k = pool.findIndex(o=>o.price<=budget);
+    if(k<0){ need[team]=0; continue; }
+    const o=pool.splice(k,1)[0];
+    rosters[team].push({x:o.x, cost:o.price}); space[team]-=o.price; need[team]--;
+  }
+  return rosters;
+}
+
+/* One season: draw production and availability, spend the games cap on the best
+   per-game players, total the categories. */
+function playSeason(rosters, games){
+  const out={};
+  for(const club in rosters){
+    const t={PTS:0,FG3M:0,REB:0,AST:0,STL:0,BLK:0,TOV:0,FGM:0,FGA:0,FTM:0,FTA:0,used:0};
+    const line = rosters[club].map(o=>{
+      const x=o.x;
+      const f = Math.max(0.2, 1 + x.vol*gauss());
+      const gp = clamp(Math.round(x.gp + 9*gauss()), 5, 82);
+      return {x, f, gp, per: (x.v/Math.max(x.gp,1))*f};
+    }).sort((a,b)=>b.per-a.per);
+    let left=games;
+    for(const p of line){
+      if(left<=0) break;
+      const g=Math.min(p.gp,left); left-=g; t.used+=g;
+      const m=p.x.mpg/36*g*p.f, r=p.x.r;
+      t.PTS+=r.PTS_36*m; t.FG3M+=r.FG3M_36*m; t.REB+=r.REB_36*m; t.AST+=r.AST_36*m;
+      t.STL+=r.STL_36*m; t.BLK+=r.BLK_36*m; t.TOV+=r.TOV_36*m;
+      t.FGM+=r.FGM_36*m; t.FGA+=r.FGA_36*m; t.FTM+=r.FTM_36*m; t.FTA+=r.FTA_36*m;
+    }
+    out[club]=t;
+  }
+  return out;
+}
+
+let STAND=null;
+function runStandings(){
+  const V=valuations(), C=standSettings(), cats=activeCats(V.L);
+  const clubs=LEAGUE.clubs, nT=clubs.length;
+  const myRoster = myVariantRoster(V, C);
+  const agg={}; clubs.forEach(c=>agg[c]={pts:0, rank:0, titles:0, cat:{}, games:0, spend:0});
+  cats.forEach(cc=>clubs.forEach(c=>agg[c].cat[cc.k]=0));
+
+  for(let s=0;s<C.sims;s++){
+    const rosters=fillLeague(V,C,myRoster,true);
+    const tot=playSeason(rosters,C.games);
+    const pts={}; clubs.forEach(c=>pts[c]=0);
+    cats.forEach(cc=>{
+      const order=[...clubs].sort((a,b)=> cc.hi ? cc.get(tot[b])-cc.get(tot[a]) : cc.get(tot[a])-cc.get(tot[b]));
+      order.forEach((c,i)=>{ const p=nT-i; pts[c]+=p; agg[c].cat[cc.k]+=p; });
+    });
+    const fin=[...clubs].sort((a,b)=>pts[b]-pts[a]);
+    fin.forEach((c,i)=>{ agg[c].rank+=i+1; if(i===0) agg[c].titles++; });
+    clubs.forEach(c=>{ agg[c].pts+=pts[c]; agg[c].games+=tot[c].used;
+      agg[c].spend+=rosters[c].reduce((x,o)=>x+o.cost,0); });
+  }
+  clubs.forEach(c=>{ const a=agg[c]; a.pts/=C.sims; a.rank/=C.sims; a.titles/=C.sims;
+    a.games/=C.sims; a.spend/=C.sims; cats.forEach(cc=>a.cat[cc.k]/=C.sims); });
+  STAND={agg, C, cats, clubs, myRoster, maxPts:nT*cats.length};
+  renderStandings();
+  return STAND;
+}
+
+/* The roster variants the standings can be run on */
+function myVariantRoster(V, C){
+  const mine = V.rows.filter(x=>x.club===LEAGUE.me);
+  const under = mine.filter(x=>x.actual!=null);
+  const keepAll = under.map(x=>({x, cost:x.actual}));
+  if(C.variant==='asis') return keepAll;
+  if(C.variant==='none') return [];
+  if(C.variant==='best' && BEST_BUILD){
+    const ids=new Set(BEST_BUILD.keepIds);
+    return keepAll.filter(o=>ids.has(o.x.id));
+  }
+  /* 'rec' — keep only the contracts the draft simulation starts in a majority
+     of runs; if it has not been run, fall back to positive surplus-adjusted value */
+  const rates = new Map((SIM_RESULT?SIM_RESULT.out:[]).filter(o=>o.held).map(o=>[o.row.id,o.rate]));
+  return keepAll.filter(o=> rates.size ? (rates.get(o.x.id)??0)>=0.5 : o.x.v>0);
+}
+
+
+/* Search for the keep/cut set that maximises roto points — the real objective.
+   Hill-climbing: from every contract kept, repeatedly make the single best
+   add/drop, re-simulating seasons each time. Slower than scoring z, but it
+   optimises the thing that decides the league instead of a proxy for it. */
+let BEST_BUILD=null;
+function evalRoster(V, C, roster, sims){
+  const clubs=LEAGUE.clubs, cats=activeCats();
+  let pts=0, titles=0;
+  for(let s=0;s<sims;s++){
+    const rosters=fillLeague(V,C,roster,true);
+    const tot=playSeason(rosters,C.games);
+    const p={}; clubs.forEach(c=>p[c]=0);
+    cats.forEach(cc=>{
+      const order=[...clubs].sort((a,b)=> cc.hi ? cc.get(tot[b])-cc.get(tot[a]) : cc.get(tot[a])-cc.get(tot[b]));
+      order.forEach((c,i)=>p[c]+=clubs.length-i);
+    });
+    pts+=p[LEAGUE.me];
+    if(clubs.every(c=>p[LEAGUE.me]>=p[c])) titles++;
+  }
+  return {pts:pts/sims, titles:titles/sims};
+}
+
+function searchBuild(){
+  const V=valuations(), C=standSettings();
+  const under=V.rows.filter(x=>x.club===LEAGUE.me && x.actual!=null);
+  const SIMS=Math.max(120, Math.round(C.sims/4));
+  let keep=under.map(()=>true);
+  const roster=()=>under.filter((_,i)=>keep[i]).map(x=>({x,cost:x.actual}));
+  let cur=evalRoster(V,C,roster(),SIMS);
+  const log=[{move:'Start — keep all '+under.length, pts:cur.pts, titles:cur.titles}];
+  for(let step=0; step<under.length; step++){
+    let bestI=-1, best=cur;
+    for(let i=0;i<under.length;i++){
+      keep[i]=!keep[i];
+      const r=evalRoster(V,C,roster(),SIMS);
+      if(r.pts>best.pts+0.02){ best=r; bestI=i; }
+      keep[i]=!keep[i];
+    }
+    if(bestI<0) break;
+    const dropping=keep[bestI];
+    keep[bestI]=!keep[bestI]; cur=best;
+    log.push({move:(dropping?'Cut ':'Re-add ')+under[bestI].name, pts:cur.pts, titles:cur.titles});
+  }
+  const finalRoster=roster();
+  const conf=evalRoster(V,C,finalRoster,C.sims);
+  BEST_BUILD={keepIds:finalRoster.map(o=>o.x.id), names:finalRoster.map(o=>o.x.name), log, conf, under};
+  el('stVariant').value='best'; runStandings();
+
+  let h=`<h3 style="font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin:16px 0 8px">
+    Search path — each row is the single best remaining move</h3>
+    <div class="tw"><table><thead><tr><th>Move</th><th>Roto points</th><th>Δ</th><th>Title %</th></tr></thead><tbody>`;
+  log.forEach((l,i)=>{
+    const d = i? l.pts-log[i-1].pts : 0;
+    h+=`<tr><td>${l.move}</td><td style="font-weight:${i===log.length-1?650:400}">${l.pts.toFixed(1)}</td>
+      <td class="${d>=0?'pos':'neg'}">${i?(d>=0?'+':'')+d.toFixed(1):'—'}</td><td>${(l.titles*100).toFixed(1)}%</td></tr>`;
+  });
+  h+=`</tbody></table></div><div class="hint" style="margin-top:8px">Confirmed over ${C.sims} seasons: `
+   + `<strong>${conf.pts.toFixed(1)}</strong> roto points, <strong>${(conf.titles*100).toFixed(1)}%</strong> title odds. `
+   + `Keeping: ${BEST_BUILD.names.join(', ')||'nobody'}. Search uses ${SIMS} seasons per candidate move, so small differences are noise — `
+   + `treat anything inside about ±1 roto point as a tie.</div>`;
+  el('standSearch').innerHTML=h;
+}
+
+
+/* Which punt strategy actually wins? Each candidate re-values the whole league
+   (so your auction targets change), refills every roster and replays the season.
+   The categories you punt still count against you in the standings. */
+const PUNTKEYS = ['PTS_36','FG3M_36','REB_36','AST_36','STL_36','BLK_36','TOV_36','FG','FT'];
+function setPunts(set){
+  PUNTKEYS.forEach(k=>puntState[k]=set.includes(k));
+  VAL_KEY=''; PROJ_KEY='';
+  renderPunts();
+}
+function searchPunts(){
+  const C=standSettings();
+  const SIMS=Math.max(120, Math.round(C.sims/4));
+  const saved=PUNTKEYS.filter(k=>puntState[k]);
+  const evalSet=set=>{
+    setPunts(set);
+    const V=valuations();
+    return {set, ...evalRoster(V, C, myVariantRoster(V,C), SIMS)};
+  };
+  const results=[evalSet([])];
+  PUNTKEYS.forEach(k=>results.push(evalSet([k])));
+  /* pair the three best single punts with each other */
+  const best3=[...results].filter(r=>r.set.length===1).sort((a,b)=>b.pts-a.pts).slice(0,3).map(r=>r.set[0]);
+  for(let i=0;i<best3.length;i++) for(let j=i+1;j<best3.length;j++) results.push(evalSet([best3[i],best3[j]]));
+  results.sort((a,b)=>b.pts-a.pts);
+  /* confirm the winner at full sample */
+  const top=results[0];
+  setPunts(top.set);
+  const V=valuations();
+  const conf=evalRoster(V, C, myVariantRoster(V,C), C.sims);
+  let h=`<h3 style="font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin:16px 0 8px">
+    Punt strategies against the standings</h3><div class="tw"><table><thead><tr>
+    <th>Strategy</th><th>Roto points</th><th>Δ vs balanced</th><th>Title %</th></tr></thead><tbody>`;
+  const bal=results.find(r=>r.set.length===0);
+  results.forEach(r=>{
+    const d=r.pts-bal.pts;
+    h+=`<tr${r===top?' style="background:var(--surface-2);font-weight:600"':''}>
+      <td>${r.set.length?'Punt '+r.set.map(k=>PUNTLABEL[k]).join(' + '):'Balanced (no punt)'}</td>
+      <td>${r.pts.toFixed(1)}</td><td class="${d>=0?'pos':'neg'}">${d>=0?'+':''}${d.toFixed(1)}</td>
+      <td>${(r.titles*100).toFixed(1)}%</td></tr>`;
+  });
+  h+=`</tbody></table></div><div class="hint" style="margin-top:8px">Best strategy confirmed over ${C.sims} seasons: `
+   +`<strong>${conf.pts.toFixed(1)}</strong> roto points, <strong>${(conf.titles*100).toFixed(1)}%</strong> title odds. `
+   +`Punt settings are now set to it. ${SIMS} seasons per candidate, so differences under about 1 point are noise.</div>`;
+  el('standPunt').innerHTML=h;
+  runStandings();
+}
+
+function renderStandings(){
+  if(!STAND){ el('standOut').innerHTML='<div class="hint">Run the standings projection to see results.</div>'; return; }
+  const {agg,C,cats,clubs,maxPts,myRoster}=STAND;
+  const order=[...clubs].sort((a,b)=>agg[b].pts-agg[a].pts);
+  const me=agg[LEAGUE.me], myPlace=order.indexOf(LEAGUE.me)+1;
+  let h=`<div class="hero" style="margin-bottom:12px">
+    <div class="tile" style="border-color:var(--s3)"><div class="k">Your projected finish</div>
+      <div class="v">${myPlace}${['st','nd','rd'][myPlace-1]||'th'}</div>
+      <div class="d">avg rank ${me.rank.toFixed(2)} of ${clubs.length}</div></div>
+    <div class="tile"><div class="k">Roto points</div><div class="v">${me.pts.toFixed(1)}</div>
+      <div class="d">of ${maxPts} · league avg ${(clubs.reduce((s,c)=>s+agg[c].pts,0)/clubs.length).toFixed(1)}</div></div>
+    <div class="tile"><div class="k">Title odds</div><div class="v">${(me.titles*100).toFixed(1)}%</div>
+      <div class="d">vs ${(100/clubs.length).toFixed(1)}% at random</div></div>
+    <div class="tile"><div class="k">Games used</div><div class="v">${Math.round(me.games)}</div>
+      <div class="d">of ${C.games} allowed</div></div>
+  </div>`;
+  h+=`<div class="tw"><table><thead><tr><th>#</th><th>Team</th><th>Roto pts</th><th>Title %</th><th>Avg rank</th>`
+    + cats.map(c=>`<th>${c.k}</th>`).join('') + `<th>Games</th><th>Spend</th></tr></thead><tbody>`;
+  order.forEach((c,i)=>{
+    const a=agg[c], mine=c===LEAGUE.me;
+    h+=`<tr${mine?' style="background:var(--surface-2);font-weight:600"':''}><td>${i+1}</td><td>${c}</td>
+      <td style="font-weight:650">${a.pts.toFixed(1)}</td><td>${(a.titles*100).toFixed(1)}%</td><td>${a.rank.toFixed(2)}</td>`
+      + cats.map(cc=>{
+          const v=a.cat[cc.k], mid=(clubs.length+1)/2;
+          const col = v>=mid+1.2?'var(--good)':(v<=mid-1.2?'var(--bad)':'var(--text-secondary)');
+          return `<td style="color:${col}">${v.toFixed(1)}</td>`;
+        }).join('')
+      + `<td>${Math.round(a.games)}</td><td>$${Math.round(a.spend)}</td></tr>`;
+  });
+  h+='</tbody></table></div>';
+  h+=`<div class="hint" style="margin-top:8px">Category columns are average roto points earned in that category (${clubs.length} = best in the league, 1 = worst). `
+    + `Your roster in this run: ${myRoster.length} contracts kept (${myRoster.map(o=>o.x.name).join(', ')||'none — full teardown'}), `
+    + `the rest filled at auction. Each run re-drafts the whole league with fresh prices and re-plays the season.</div>`;
+  el('standOut').innerHTML=h;
+}
+
+/* Compare the roster variants head to head — the actual proof */
+function compareVariants(){
+  const keep=el('stVariant').value, out=[];
+  for(const v of (BEST_BUILD?['asis','rec','best','none']:['asis','rec','none'])){
+    el('stVariant').value=v;
+    const S=runStandings();
+    const a=S.agg[LEAGUE.me];
+    const order=[...S.clubs].sort((x,y)=>S.agg[y].pts-S.agg[x].pts);
+    out.push({v, pts:a.pts, titles:a.titles, rank:a.rank, place:order.indexOf(LEAGUE.me)+1,
+              roster:S.myRoster.map(o=>o.x.name)});
+  }
+  el('stVariant').value=keep; runStandings();
+  const NAME={asis:'Keep every contract',rec:'Draft simulator’s keeps',best:'Optimised for roto points',none:'Cut everyone (full teardown)'};
+  let h=`<h3 style="font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin:16px 0 8px">
+    Roster strategies, head to head</h3><div class="tw"><table><thead><tr>
+    <th>Strategy</th><th>Contracts kept</th><th>Roto pts</th><th>Avg finish</th><th>Title %</th></tr></thead><tbody>`;
+  const best=Math.max(...out.map(o=>o.pts));
+  out.forEach(o=>{
+    h+=`<tr${o.pts===best?' style="background:var(--surface-2);font-weight:600"':''}>
+      <td>${NAME[o.v]}</td><td style="color:var(--text-secondary);font-weight:400">${o.roster.length}${o.roster.length?' — '+o.roster.join(', '):''}</td>
+      <td style="font-weight:650">${o.pts.toFixed(1)}</td><td>${o.rank.toFixed(2)}</td><td>${(o.titles*100).toFixed(1)}%</td></tr>`;
+  });
+  h+=`</tbody></table></div><div class="hint" style="margin-top:8px">All four strategies are run under the punt settings currently selected`
+   + `${PUNTS.filter(c=>puntState[c]).length?' (punting '+PUNTS.filter(c=>puntState[c]).map(c=>PUNTLABEL[c]).join(', ')+')':' (balanced)'}, `
+   + `so change those and re-run to see a different trade-off. Title odds carry roughly ±1.5 points of sampling noise at this sample size.</div>`;
+  el('standCompare').innerHTML=h;
+}
+
 /* ---- trend chart ---- */
 const TREND_STATS=[['PTS_36','Points'],['REB_36','Rebounds'],['AST_36','Assists'],['FG3M_36','3PM'],['TOV_36','Turnovers'],['STL_36','Steals'],['BLK_36','Blocks']];
 function renderTrend(p,R){
@@ -1331,7 +1689,7 @@ CTL.forEach(c=>el(c).addEventListener('input',render));
 el('autoMin').addEventListener('change',render);
 const LGCTL=['lgTeams','lgBudget','lgRoster','lgMin','lgFormat','lgDyn','lgHorizon','lgDisc','lgPos',
   'w_PTS_36','w_REB_36','w_AST_36','w_FG3M_36','w_STL_36','w_BLK_36','w_TOV_36',
-  'w_FGM_36','w_FGA_36','w_FTM_36','w_FTA_36'];
+  'w_FGM_36','w_FGA_36','w_FTM_36','w_FTA_36','lgBasis'];
 LGCTL.forEach(c=>{ const n=el(c); if(n) n.addEventListener(n.type==='checkbox'||n.tagName==='SELECT'?'change':'input',
   c==='lgFormat' ? ()=>{renderPunts();render();} : render); });
 el('boardSearch').addEventListener('input',e=>{ boardFilter=e.target.value.toLowerCase().trim(); renderBoard(); });
@@ -1355,6 +1713,12 @@ el('punts').addEventListener('click',e=>{
   renderPunts(); render();
 });
 el('csvBtn').addEventListener('click',boardCsv);
+el('stRun').addEventListener('click',()=>{ el('standOut').innerHTML='<div class="hint">Simulating seasons…</div>'; setTimeout(runStandings,20); });
+el('stPunt').addEventListener('click',()=>{ el('standPunt').innerHTML='<div class="hint">Testing punt strategies against the standings…</div>'; setTimeout(searchPunts,20); });
+el('stSearch').addEventListener('click',()=>{ el('standSearch').innerHTML='<div class="hint">Searching keep/cut combinations… this runs thousands of seasons.</div>'; setTimeout(searchBuild,20); });
+el('stCmp').addEventListener('click',()=>{ el('standCompare').innerHTML='<div class="hint">Comparing…</div>'; setTimeout(compareVariants,20); });
+['stGames','stSpots','stCap','stSims','stVariant','stExp'].forEach(id=>
+  el(id).addEventListener(el(id).type==='checkbox'||el(id).tagName==='SELECT'?'change':'input',()=>{ STAND=null; renderStandings(); }));
 el('simRun').addEventListener('click',()=>{ el('simOut').innerHTML='<div class="hint">Running…</div>'; setTimeout(runSim,20); });
 ['simCap','simSpots','simStart','simN','simVol','simInfl','simCut','simMinG','simMinB','simOthers'].forEach(id=>
   el(id).addEventListener(id==='simOthers'?'change':'input',()=>{ el('simOut').innerHTML='<div class="hint">Settings changed — run the simulation again.</div>'; SIM_RESULT=null; updateCapLine(); }));
@@ -1411,7 +1775,10 @@ el('method').innerHTML = `
 <p><strong>Estimated contract.</strong> Regressing your league's salaries on projected value does not work, and the app reports why: the rank correlation between what is on the books and what players project for is about 0.24. Contracts here are kept at their signing price, so the book is a mix of fresh auction prices and years-old bargains, and a least-squares fit collapses toward a flat "everyone costs $12". What is stable is the <em>shape</em> of the pay scale — one contract near $46, a handful in the thirties, a median around $5 and a long tail of minimums. So the estimate maps each player's projected-value rank onto your league's own observed salary distribution: your league's money, allocated by projection instead of by history. The surplus column is the gap between that estimate and what is actually being paid, which is where rookie-scale deals show up — the players on them cost about 22% of their estimated market value, the single largest source of surplus in the league.</p>
 <p><strong>Draft simulation.</strong> Each run draws every free agent's price from a lognormal around his estimated contract, scaled by league-wide auction inflation, and draws every player's production from his own comparables' spread (the volatility column — a 25-year-old with consistent comps carries ±10%, a young player with wild comps ±25%). It then solves for the best roster you could actually assemble: a Lagrangian knapsack over your contracts (at their real 2026-27 salaries) and the auction pool, subject to the cap, the lineup size and any position minimums. Only the starting lineup scores and the remaining spots cost the minimum, which is what makes stars-and-scrubs fall out of the optimiser rather than being assumed. Aggregating thousands of runs gives each player a rate — how often he belongs on the optimal roster — which is a more useful draft instruction than a single point projection, because it already accounts for him going for more than you hoped.</p>
 <p><strong>Auction inflation.</strong> Rather than a guessed percentage, it is computed from the league: every team's cap space against the estimated cost of the free agents they must sign. The number and your share of it are shown above the simulator, and you can override it.</p>
-<p><strong>Known limits.</strong> No team-context, contract, draft-class or injury-report data is in the file, so trades, role changes and known injuries are exposed as manual inputs rather than inferred. Rookies entering the league in 2026-27 are not projected, so an incoming draft class is missing from the auction board. Position groups are inferred, not official. The simulator assumes cutting frees the full salary (set a cut penalty if your league keeps dead money), that other teams' expiring contracts are re-signed rather than hitting the market (a toggle), and that the auction is a single simultaneous market rather than a sequential draft where the order of nominations matters. Trades, draft picks and the incoming 2026 rookie class are not modelled at all. Comparables are drawn from seasons through 2023-24 so that every comp has a real following season on record.</p>`;
+<p><strong>Projected standings.</strong> Auction dollars and z-scores are proxies; the league is decided by roto points, so the standings simulation is the thing to trust when the two disagree. Each run refills every one of the nine rosters at auction from the same free-agent pool, draws production and availability for every player, spends each team's games-played allowance on its best per-game players, totals the nine categories, ranks the teams and awards roto points. It always scores all nine categories — a category you punt still hands you its last-place point, which is what makes punting a real trade-off rather than a free win.</p>
+<p><strong>The games cap changes what a player is worth.</strong> With a team limit on games played, games are the scarce resource, not roster spots: a full roster can supply roughly 1,050-1,100 games against a 920 allowance, so the worst 130-odd games are simply not used. That means a player is worth the games he supplies times how much better than replacement he is <em>per game</em>, and missing time costs far less than a season-totals model implies. Anthony Davis at 52 projected games scores below replacement on totals and comfortably above it per game. The value-basis selector switches between the two; with a games cap set, per-game is the correct one.</p>
+<p><strong>Searching, not asserting.</strong> Two searches optimise against the standings rather than against a proxy. The build search hill-climbs over which contracts to keep, re-simulating seasons at every step and reporting the path so each move's contribution is visible. The punt search re-values the entire league under each candidate punt, refills every roster and replays the season. Both report enough sample-size detail to see what is a real edge and what is noise — differences inside about a roto point are noise, and title odds carry a percentage point or two of sampling error.</p>
+<p><strong>Known limits.</strong> No team-context, contract, draft-class or injury-report data is in the file, so trades, role changes and known injuries are exposed as manual inputs rather than inferred. Rookies entering the league in 2026-27 are not projected, so an incoming draft class is missing from the auction board. Position groups are inferred, not official. The simulator assumes cutting frees the full salary (set a cut penalty if your league keeps dead money), that other teams' expiring contracts are re-signed rather than hitting the market (a toggle), and that the auction is a single simultaneous market rather than a sequential draft where the order of nominations matters. Trades, draft picks and the incoming 2026 rookie class are not modelled at all — which matters, because when a roster's problem is that its money is committed to the wrong players, trades are the lever the simulation cannot see. Rival teams are assumed to draft greedily by projected value rather than to their own needs or punts, which probably makes them slightly stronger than they will be. Comparables are drawn from seasons through 2023-24 so that every comp has a real following season on record.</p>`;
 
 renderPunts();
 fillPlayers('');
