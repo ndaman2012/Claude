@@ -342,7 +342,7 @@ th[aria-sort] .arrow{opacity:1;color:var(--s1)}
     <div id="capLine" class="hint" style="margin-bottom:10px"></div>
     <div class="filters">
       <span>Cap $<input type="number" id="simCap" value="180" min="50" max="500" step="5"></span>
-      <span>Roster spots <input type="number" id="simSpots" value="16" min="8" max="20" step="1"></span>
+      <span>Roster spots <input type="number" id="simSpots" value="15" min="8" max="20" step="1"></span>
       <span>Lineup size <input type="number" id="simStart" value="10" min="5" max="16" step="1"></span>
       <span>Runs <input type="number" id="simN" value="1500" min="200" max="8000" step="100"></span>
       <span>Price noise <input type="number" id="simVol" value="30" min="0" max="80" step="5">%</span>
@@ -350,7 +350,7 @@ th[aria-sort] .arrow{opacity:1;color:var(--s1)}
       <span>Cut penalty <input type="number" id="simCut" value="0" min="0" max="100" step="10">%</span>
       <span>Min G <input type="number" id="simMinG" value="4" min="0" max="10" step="1"></span>
       <span>Min B <input type="number" id="simMinB" value="3" min="0" max="10" step="1"></span>
-      <label class="toggle" style="margin:0"><input type="checkbox" id="simOthers"> Other teams' expirings hit the market</label>
+      <label class="toggle" style="margin:0"><input type="checkbox" id="simOthers" checked> Expiring contracts hit the auction</label>
       <button class="btn" id="simRun">Run simulation</button>
     </div>
     <div id="simOut"></div>
@@ -362,7 +362,7 @@ th[aria-sort] .arrow{opacity:1;color:var(--s1)}
     <div class="hint" style="margin-bottom:10px">Every team is filled to a full roster at auction, then the season is played: each team spends its games-played allowance on its best per-game players, category totals are ranked across the league, and roto points are awarded. This is the number that decides the league — the auction values above are only a means to it.</div>
     <div class="filters">
       <span>Games cap <input type="number" id="stGames" value="920" min="200" max="1400" step="10"></span>
-      <span>Roster spots <input type="number" id="stSpots" value="16" min="8" max="20" step="1"></span>
+      <span>Roster spots <input type="number" id="stSpots" value="15" min="8" max="20" step="1"></span>
       <span>Cap $<input type="number" id="stCap" value="180" min="50" max="500" step="5"></span>
       <span>Seasons <input type="number" id="stSims" value="1200" min="100" max="6000" step="100"></span>
       <span>Your roster <select id="stVariant" style="width:auto;padding:4px 6px">
@@ -376,11 +376,13 @@ th[aria-sort] .arrow{opacity:1;color:var(--s1)}
       <button class="btn" id="stCmp">Compare strategies</button>
       <button class="btn" id="stSearch">Search best build</button>
       <button class="btn" id="stPunt">Search punt strategy</button>
+      <button class="btn" id="stRosters">Show full rosters</button>
     </div>
     <div id="standOut"></div>
     <div id="standCompare"></div>
     <div id="standSearch"></div>
     <div id="standPunt"></div>
+    <div id="standRosters"></div>
   </div>
 
   <details class="card">
@@ -934,7 +936,7 @@ function fitSalary(rows, L){
      observed salary distribution — the league's money, allocated by projection. */
   const MIN=1;
   const paid = LEAGUE.rows.filter(r=>!r.fa && r.s25!=null).map(r=>r.s25).sort((a,b)=>b-a);
-  const slots = LEAGUE.clubs.length * 16;
+  const slots = LEAGUE.clubs.length * 15;
   const scale = [];
   for(let i=0;i<slots;i++) scale.push(i<paid.length ? paid[i] : MIN);
   /* light smoothing so neighbouring ranks do not inherit one-off contract quirks */
@@ -1454,7 +1456,7 @@ function evalRoster(V, C, roster, sims){
 function searchBuild(){
   const V=valuations(), C=standSettings();
   const under=V.rows.filter(x=>x.club===LEAGUE.me && x.actual!=null);
-  const SIMS=Math.max(120, Math.round(C.sims/4));
+  const SIMS=Math.max(600, Math.round(C.sims/2));
   let keep=under.map(()=>true);
   const roster=()=>under.filter((_,i)=>keep[i]).map(x=>({x,cost:x.actual}));
   let cur=evalRoster(V,C,roster(),SIMS);
@@ -1464,7 +1466,7 @@ function searchBuild(){
     for(let i=0;i<under.length;i++){
       keep[i]=!keep[i];
       const r=evalRoster(V,C,roster(),SIMS);
-      if(r.pts>best.pts+0.02){ best=r; bestI=i; }
+      if(r.pts>best.pts+0.35){ best=r; bestI=i; }   /* ignore differences inside noise */
       keep[i]=!keep[i];
     }
     if(bestI<0) break;
@@ -1504,7 +1506,9 @@ function setPunts(set){
 }
 function searchPunts(){
   const C=standSettings();
-  const SIMS=Math.max(120, Math.round(C.sims/4));
+  /* only ~13 candidates, so each gets a real sample — at a few hundred seasons
+     the ranking of punt strategies is mostly sampling noise */
+  const SIMS=Math.max(800, Math.round(C.sims));
   const saved=PUNTKEYS.filter(k=>puntState[k]);
   const evalSet=set=>{
     setPunts(set);
@@ -1538,6 +1542,140 @@ function searchPunts(){
    +`Punt settings are now set to it. ${SIMS} seasons per candidate, so differences under about 1 point are noise.</div>`;
   el('standPunt').innerHTML=h;
   runStandings();
+}
+
+
+/* ==========================================================================
+   FULL ROSTERS — the representative team each simulation converges on
+   ========================================================================== */
+function modalRosters(sims){
+  const V=valuations(), C=standSettings();
+  const myRoster=myVariantRoster(V,C);
+  const clubs=LEAGUE.clubs;
+  const count={}, paid={};
+  clubs.forEach(c=>{ count[c]=new Map(); paid[c]=new Map(); });
+  for(let s=0;s<sims;s++){
+    const r=fillLeague(V,C,myRoster,true);
+    clubs.forEach(c=>r[c].forEach(o=>{
+      count[c].set(o.x.id,(count[c].get(o.x.id)||0)+1);
+      paid[c].set(o.x.id,(paid[c].get(o.x.id)||0)+o.cost);
+    }));
+  }
+  /* Assemble one consistent league: a player can only be on one roster, so all
+     teams' claims are pooled and settled together — the team that wins a player
+     most often in simulation gets him, and everyone else moves down their list. */
+  const held={};
+  clubs.forEach(c=>held[c]=new Set());
+  LEAGUE.rows.forEach(r=>{ if(!r.fa && r.club && r.s26!=null && r.pid!=null) held[r.club].add(r.pid); });
+  const out={}, spend={}, taken=new Set();
+  clubs.forEach(c=>{
+    out[c] = (c===LEAGUE.me)
+      ? myRoster.map(o=>({x:o.x, cost:o.cost, src:'contract'}))
+      : V.rows.filter(x=>held[c].has(x.id)).map(x=>({x, cost:x.actual, src:'contract'}));
+    spend[c] = out[c].reduce((s,o)=>s+o.cost,0);
+    out[c].forEach(o=>taken.add(o.x.id));
+  });
+  const claims=[];
+  clubs.forEach(c=>[...count[c].entries()].forEach(([id,n])=>{
+    const x=V.byId.get(id); if(!x || taken.has(id)) return;
+    claims.push({club:c, x, rate:n/sims, cost:paid[c].get(id)/n});
+  }));
+  claims.sort((a,b)=> b.rate-a.rate || b.x.v-a.x.v);
+  for(const cl of claims){
+    if(taken.has(cl.x.id)) continue;
+    const c=cl.club;
+    if(out[c].length>=C.spots) continue;
+    const left=C.spots-out[c].length;
+    if(spend[c]+cl.cost > C.cap-(left-1)) continue;
+    out[c].push({x:cl.x, cost:cl.cost, src:'auction', rate:cl.rate});
+    spend[c]+=cl.cost; taken.add(cl.x.id);
+  }
+  /* top up any short roster with the best unclaimed players at the minimum */
+  const spare=V.rows.filter(x=>x.lg && (x.lg.fa||x.expiring) && !taken.has(x.id)).sort((a,b)=>b.v-a.v);
+  clubs.forEach(c=>{
+    while(out[c].length<C.spots && spare.length){
+      const x=spare.shift();
+      if(spend[c]+1 > C.cap) break;
+      out[c].push({x, cost:1, src:'min'}); spend[c]+=1; taken.add(x.id);
+    }
+    out[c].sort((a,b)=>b.x.v-a.x.v);
+  });
+  return {rosters:out, C, spendOf:c=>out[c].reduce((s,o)=>s+o.cost,0)};
+}
+
+/* Score one fixed set of rosters over many seasons */
+function scoreRosters(rosterMap, C, sims){
+  const clubs=LEAGUE.clubs, cats=activeCats();
+  const pts={}, titles={}, games={};
+  clubs.forEach(c=>{ pts[c]=0; titles[c]=0; games[c]=0; });
+  for(let s=0;s<sims;s++){
+    const tot=playSeason(rosterMap,C.games);
+    const p={}; clubs.forEach(c=>p[c]=0);
+    cats.forEach(cc=>{
+      const order=[...clubs].sort((a,b)=> cc.hi ? cc.get(tot[b])-cc.get(tot[a]) : cc.get(tot[a])-cc.get(tot[b]));
+      order.forEach((c,i)=>p[c]+=clubs.length-i);
+    });
+    const win=clubs.reduce((a,c)=>p[c]>p[a]?c:a,clubs[0]);
+    titles[win]++;
+    clubs.forEach(c=>{ pts[c]+=p[c]; games[c]+=tot[c].used; });
+  }
+  clubs.forEach(c=>{ pts[c]/=sims; titles[c]/=sims; games[c]/=sims; });
+  return {pts,titles,games};
+}
+
+function renderRosters(){
+  const M=modalRosters(Math.max(300, Math.round(standSettings().sims/3)));
+  const C=M.C, clubs=LEAGUE.clubs;
+  const sc=scoreRosters(M.rosters, C, C.sims);
+  const order=[...clubs].sort((a,b)=>sc.pts[b]-sc.pts[a]);
+  const mine=M.rosters[LEAGUE.me];
+  const place=order.indexOf(LEAGUE.me)+1;
+  const NAME={asis:'keeping every contract',rec:'the draft simulator’s keeps',best:'the optimised build',none:'a full teardown'};
+  let h=`<div class="hint" style="margin:12px 0 8px">Rosters below are what the simulation converges on under <strong>${NAME[C.variant]}</strong>`
+    + `${PUNTS.filter(c=>puntState[c]).length?' while punting '+PUNTS.filter(c=>puntState[c]).map(c=>PUNTLABEL[c]).join(', '):' with no punt'}: `
+    + `each team's contracts, then the free agents it wins most often, at the price it pays for them. `
+    + `Every player is assigned to exactly one team: where several teams want the same man, he goes to whoever wins him most often and the others move down their list. `
+    + `Played out ${C.sims} times, this exact league finishes you <strong>${place}${['st','nd','rd'][place-1]||'th'}</strong> `
+    + `with <strong>${sc.pts[LEAGUE.me].toFixed(1)}</strong> roto points and <strong>${(sc.titles[LEAGUE.me]*100).toFixed(1)}%</strong> title odds. `
+    + `These are the odds for <em>this one</em> draft outcome, so they run lower than the standings table above, which averages over every way the auction could break — a chunk of your title equity is the chance of landing a star cheap.</div>`;
+  h+=`<h3 style="font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin:14px 0 8px">
+    Your ${mine.length}-man roster — $${M.spendOf(LEAGUE.me).toFixed(2)} of $${C.cap}</h3>`;
+  h+=`<div class="tw"><table><thead><tr><th>Player</th><th>Pos</th><th>Age</th><th>How</th><th>Cost</th><th>Win rate</th>
+    <th>GP</th><th>MPG</th><th>PTS</th><th>REB</th><th>AST</th><th>3PM</th><th>STL</th><th>BLK</th><th>TOV</th><th>FG%</th><th>FT%</th><th>Value</th></tr></thead><tbody>`;
+  mine.forEach(o=>{
+    const x=o.x;
+    const how = o.src==='contract' ? `<span class="pill" style="border-color:var(--s3);color:var(--s3)">contract</span>`
+      : o.src==='min' ? `<span class="pill">min</span>` : `<span class="pill" style="border-color:var(--s1);color:var(--s1)">auction</span>`;
+    h+=`<tr data-id="${x.id}" style="cursor:pointer"><td>${x.name} <span style="color:var(--text-muted)">${x.team}</span></td>
+      <td><span class="pill">${x.pos}</span></td><td>${Math.round(x.age)}</td><td>${how}</td>
+      <td style="font-weight:650">$${o.cost.toFixed(2)}</td><td>${o.rate!=null?Math.round(o.rate*100)+'%':'—'}</td>
+      <td>${Math.round(x.gp)}</td><td>${fmt(x.mpg)}</td>
+      <td>${fmt(x.pg.PTS_36)}</td><td>${fmt(x.pg.REB_36)}</td><td>${fmt(x.pg.AST_36)}</td><td>${fmt(x.pg.FG3M_36)}</td>
+      <td>${fmt(x.pg.STL_36)}</td><td>${fmt(x.pg.BLK_36)}</td><td>${fmt(x.pg.TOV_36)}</td>
+      <td>${(100*x.r.FG_PCT).toFixed(1)}</td><td>${(100*x.r.FT_PCT).toFixed(1)}</td><td>${x.v.toFixed(1)}</td></tr>`;
+  });
+  const tot=mine.reduce((a,o)=>({gp:a.gp+o.x.gp, v:a.v+o.x.v}),{gp:0,v:0});
+  h+=`</tbody><tfoot><tr style="font-weight:650"><td>Total</td><td></td><td></td><td></td>
+    <td>$${M.spendOf(LEAGUE.me).toFixed(2)}</td><td></td><td>${Math.round(tot.gp)}</td>
+    <td colspan="10" style="text-align:left;color:var(--text-secondary);font-weight:400">
+    ${Math.round(tot.gp)} games available against a ${C.games} cap${tot.gp<C.games?` — <span class="neg">${C.games-Math.round(tot.gp)} short</span>`:` — ${Math.round(tot.gp)-C.games} spare`}</td>
+    <td>${tot.v.toFixed(1)}</td></tr></tfoot></table></div>`;
+
+  h+=`<h3 style="font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin:18px 0 8px">
+    The rest of the league</h3><div class="tw"><table><thead><tr><th>#</th><th>Team</th><th>Roto pts</th><th>Title %</th><th>Spend</th><th>Games</th><th>Roster</th></tr></thead><tbody>`;
+  order.forEach((c,i)=>{
+    if(c===LEAGUE.me) return;
+    h+=`<tr><td>${i+1}</td><td>${c}</td><td>${sc.pts[c].toFixed(1)}</td><td>${(sc.titles[c]*100).toFixed(1)}%</td>
+      <td>$${M.spendOf(c).toFixed(0)}</td><td>${Math.round(M.rosters[c].reduce((s,o)=>s+o.x.gp,0))}</td>
+      <td style="text-align:left;white-space:normal;font-size:12px;color:var(--text-secondary)">${
+        M.rosters[c].map(o=>`${o.x.name} <span style="color:var(--text-muted)">$${o.cost.toFixed(0)}</span>`).join(' · ')}</td></tr>`;
+  });
+  h+='</tbody></table></div>';
+  el('standRosters').innerHTML=h;
+  el('standRosters').querySelectorAll('tr[data-id]').forEach(tr=>tr.addEventListener('click',()=>{
+    el('search').value=''; fillPlayers(''); el('player').value=tr.dataset.id; render();
+    document.querySelector('.hero').scrollIntoView({behavior:'smooth',block:'start'});
+  }));
 }
 
 function renderStandings(){
@@ -1714,6 +1852,7 @@ el('punts').addEventListener('click',e=>{
 });
 el('csvBtn').addEventListener('click',boardCsv);
 el('stRun').addEventListener('click',()=>{ el('standOut').innerHTML='<div class="hint">Simulating seasons…</div>'; setTimeout(runStandings,20); });
+el('stRosters').addEventListener('click',()=>{ el('standRosters').innerHTML='<div class="hint">Building rosters…</div>'; setTimeout(renderRosters,20); });
 el('stPunt').addEventListener('click',()=>{ el('standPunt').innerHTML='<div class="hint">Testing punt strategies against the standings…</div>'; setTimeout(searchPunts,20); });
 el('stSearch').addEventListener('click',()=>{ el('standSearch').innerHTML='<div class="hint">Searching keep/cut combinations… this runs thousands of seasons.</div>'; setTimeout(searchBuild,20); });
 el('stCmp').addEventListener('click',()=>{ el('standCompare').innerHTML='<div class="hint">Comparing…</div>'; setTimeout(compareVariants,20); });
