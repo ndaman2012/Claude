@@ -169,7 +169,7 @@ summary{cursor:pointer;font-size:12.5px;color:var(--text-secondary)}
     <div class="ctl">
       <div class="ctlhead"><label for="gp">Games played</label><span class="val" id="gpV"></span></div>
       <input type="range" id="gp" min="1" max="82" step="1" value="65">
-      <div class="hint">Auto value comes from comparables' actual next-season availability blended with the player's own 3-year durability.</div>
+      <div class="hint">Auto value is the player's own recency-weighted 3-year minutes and availability, aged forward. Comparables drive per-36 production only — never playing time.</div>
     </div>
     <div class="ctl">
       <div class="ctlhead"><label for="role">Role / usage change</label><span class="val" id="roleV"></span></div>
@@ -329,16 +329,16 @@ function project(p){
     ratioUsed[k]=r;
     sim[k] = (last.r36[k]||0) * r;
   });
-  const mpgRatio = wavg(c=>c.d.MPG ?? 1);
-  const simMpg = last.mpg * mpgRatio;
-  const simGpf = wavg(c=>c.gpf);
+  const mpgRatio = wavg(c=>c.d.MPG ?? 1);   // reported for context only
+  /* Minutes and games come from the PLAYER's own history in every model — the
+     comparables drive per-36 production only, never playing time. */
+  const simMpg = histMpg, simGpf = histGpf;
 
   /* ---- blend ---- */
   const b = S.blend/100;
   const out = {};
   RATES.concat(PCTS).forEach(k=> out[k] = (1-b)*hist[k] + b*sim[k]);
-  let mpg = (1-b)*histMpg + b*simMpg;
-  let gpf = (1-b)*histGpf + b*simGpf;
+  const mpg = histMpg, gpf = histGpf;
 
   /* ---- scenario tilt on playing time (floor/ceiling) ---- */
   const models = {hist:{r:hist,mpg:histMpg,gpf:histGpf}, sim:{r:sim,mpg:simMpg,gpf:simGpf}, blend:{r:out,mpg,gpf}};
@@ -462,7 +462,8 @@ function render(){
   h+=`<tr><td>Games played</td><td style="color:var(--text-secondary)">${last.gp}</td><td>${fmt(M.hist.gp,0)}</td><td>${fmt(M.sim.gp,0)}</td><td style="font-weight:650">${fmt(M.blend.gp,0)}</td><td class="${M.blend.gp-last.gp>=0?'pos':'neg'}">${M.blend.gp-last.gp>=0?'+':''}${fmt(M.blend.gp-last.gp,0)}</td></tr>`;
   h+='</tbody>';
   el('projTable').innerHTML=h;
-  el('projNote').textContent = `Similarity column is anchored on the 2025-26 season and moved by the trajectory of the ${Math.round(S.k)} closest comparables (mean similarity ${fmt(R.comps.reduce((s,c)=>s+c.sim,0)/R.comps.length)}). Historical column is a recency- and minute-weighted average of ${p.seasons.length} season${p.seasons.length>1?'s':''} run through the age curve.`;
+  const mpgTxt = `${((R.mpgRatio-1)*100>=0?'+':'')}${((R.mpgRatio-1)*100).toFixed(1)}%`;
+  el('projNote').textContent = `Similarity column is anchored on the 2025-26 season and moved by the trajectory of the ${Math.round(S.k)} closest comparables (mean similarity ${fmt(R.comps.reduce((s,c)=>s+c.sim,0)/R.comps.length)}). Historical column is a recency- and minute-weighted average of ${p.seasons.length} season${p.seasons.length>1?'s':''} run through the age curve. Minutes and games are the player's own recency-weighted history in every column — comparables set per-36 production only (their collective minutes trajectory would have been ${mpgTxt}, shown for reference).`;
 
   renderComps(R);
   renderTrend(p, R);
@@ -591,7 +592,8 @@ el('statTabs').addEventListener('click',e=>{
 el('method').innerHTML = `
 <p><strong>Data.</strong> ${P.length} players with at least 15 games and 250 minutes in 2025-26, built from 20 seasons of regular-season totals. All production is converted to per-36-minute rates so that changes in playing time and changes in production are modelled separately.</p>
 <p><strong>Model 1 — historical average.</strong> A minute-weighted average of the player's last three seasons, with older seasons decayed by the recency factor λ. It is then aged forward to 2026-27 using an <em>empirical</em> age curve: for every age, the median year-over-year change in each per-36 rate among all players in the dataset with 300+ minutes in back-to-back seasons. Peak per-36 scoring growth sits at ages 19-22 (~+8%/yr), crosses 1.0 around age 25-26, and declines ~4-6%/yr from 30 on.</p>
-<p><strong>Model 2 — similarity score.</strong> Every player-season in the pool (400+ minutes, 20+ games) is placed in a 14-dimension standardized feature space: MPG, per-36 points, rebounds, assists, turnovers, steals, blocks, 3PA, FTA, FGA, true shooting, 3P%, FT% and a usage proxy. Distance is a weighted Euclidean distance in that space plus an age penalty (matches are restricted to ±2.5 years of age). Similarity = 100·exp(−distance/2.2), so 100 is an identical season and scores fall off smoothly. For each comparable, the model records what actually happened the <em>next</em> season — the ratio of each per-36 rate, minutes and games played — and applies the similarity-weighted average of those ratios to the target player's 2025-26 line. This is what makes the similarity score change the projection rather than just describe the player.</p>
+<p><strong>Model 2 — similarity score.</strong> Every player-season in the pool (400+ minutes, 20+ games) is placed in a 14-dimension standardized feature space: MPG, per-36 points, rebounds, assists, turnovers, steals, blocks, 3PA, FTA, FGA, true shooting, 3P%, FT% and a usage proxy. Distance is a weighted Euclidean distance in that space plus an age penalty (matches are restricted to ±2.5 years of age). Similarity = 100·exp(−distance/2.2), so 100 is an identical season and scores fall off smoothly. For each comparable, the model records what actually happened the <em>next</em> season — the ratio of each per-36 rate — and applies the similarity-weighted average of those ratios to the target player's 2025-26 line. This is what makes the similarity score change the projection rather than just describe the player.</p>
+<p><strong>Playing time.</strong> Minutes per game and games played are always the player's <em>own</em> recency-weighted three-year history, aged forward by the league's minutes curve — comparables never set them. The comps' collective minutes trajectory is reported under the projection table as context, and the per-comp availability column shows what happened to those players, but neither feeds the projection. Override both directly with the manual inputs.</p>
 <p><strong>Blending.</strong> The blend slider mixes the two per-36 vectors linearly, then every user adjustment (role, pace, 3-point rate, efficiency regression) is applied identically to all three columns so they stay comparable. Points, FG%, TS% and total rebounds are recomputed from the adjusted components rather than scaled directly, so the line always stays internally consistent.</p>
 <p><strong>Scenario slider.</strong> Instead of a symmetric error band, floor and ceiling come from the comparable set's own actual outcomes. Each comp is scored on how its following season went overall (production per minute × minutes × availability), converted to a percentile rank within the comp set, and the comps are then re-weighted with a Gaussian kernel centred on the requested percentile. Because the scenario is chosen at the <em>comparable</em> level rather than stat by stat, a 20th-percentile projection is a coherent picture of what a bad-but-real season looked like for players like this — not fourteen unrelated bad numbers stacked on each other. The 25th-percentile column in the comparables table shows exactly which seasons are driving the current scenario.</p>
 <p><strong>Known limits.</strong> No team-context, contract, draft-class or injury-report data is in the file, so trades, role changes and known injuries are exposed as manual inputs rather than inferred. Rookies entering the league in 2026-27 are not projected. Comparables are drawn from seasons through 2023-24 so that every comp has a real following season on record.</p>`;
