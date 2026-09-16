@@ -378,6 +378,11 @@ th[aria-sort] .arrow{opacity:1;color:var(--s1)}
       <button class="btn" id="stPunt">Search punt strategy</button>
       <button class="btn" id="stRosters">Show full rosters</button>
     </div>
+    <div class="filters">
+      <span>Pin prices <input type="text" id="scPin" placeholder="Wembanyama=70, Maxey=45" style="width:230px"></span>
+      <span>Off my board <input type="text" id="scOff" placeholder="Wembanyama" style="width:170px"></span>
+      <span id="scNote" class="hint" style="margin:0"></span>
+    </div>
     <div id="standOut"></div>
     <div id="standCompare"></div>
     <div id="standSearch"></div>
@@ -1108,6 +1113,32 @@ function boardCsv(){
 function gauss(){ let u=0,v=0; while(!u)u=Math.random(); while(!v)v=Math.random();
   return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
 
+/* Pinned prices and players you assume you will lose. Lets you ask "what if he
+   goes for $70" instead of trusting the model's estimate of what he costs. */
+let PIN=new Map(), OFF=new Set();
+function parseScenario(){
+  PIN=new Map(); OFF=new Set();
+  const V=VAL_CACHE;
+  const find=name=>{
+    const n=name.trim().toLowerCase();
+    if(!n || !V) return null;
+    return V.rows.find(x=>x.name.toLowerCase()===n)
+        || V.rows.find(x=>x.name.toLowerCase().includes(n));
+  };
+  (el('scPin').value||'').split(',').forEach(part=>{
+    const m=part.split('=');
+    if(m.length<2) return;
+    const x=find(m[0]), p=parseFloat(m[1].replace(/[^0-9.]/g,''));
+    if(x && p>0) PIN.set(x.id, p);
+  });
+  (el('scOff').value||'').split(',').forEach(part=>{
+    const x=find(part); if(x) OFF.add(x.id);
+  });
+  const names=[...PIN.entries()].map(([id,p])=>`${V.byId.get(id).name} at $${p}`)
+    .concat([...OFF].map(id=>`${V.byId.get(id).name} off your board`));
+  el('scNote').textContent = names.length ? 'Scenario: '+names.join(', ') : 'No price scenario set.';
+}
+
 function simSettings(){
   return {cap:+el('simCap').value, spots:+el('simSpots').value, start:+el('simStart').value, sims:+el('simN').value,
           vol:+el('simVol').value/100, infl:+el('simInfl').value/100,
@@ -1155,7 +1186,7 @@ function runSim(){
      other teams' expiring deals are only in play if you say their team lets them go */
   const others = el('simOthers').checked;
   const faPool = V.rows.filter(x=> x.lg && (x.lg.fa || (x.expiring && (others || x.club===LEAGUE.me))));
-  const pool = [...faPool].sort((a,b)=>b.v-a.v).slice(0, 170);
+  const pool = [...faPool].filter(x=>!OFF.has(x.id)).sort((a,b)=>b.v-a.v).slice(0, 170);
   const cand = [
     ...under.map(x=>({row:x, base:x.actual, held:true,  pos:x.pos, v:0, cost:0})),
     ...pool .map(x=>({row:x, base:Math.max(x.est,1), held:false, pos:x.pos, v:0, cost:0}))
@@ -1174,6 +1205,7 @@ function runSim(){
       c.v = x.v + x.vol*(0.5*Math.abs(x.v)+0.5*poolSd)*gauss();
       c.cost = c.held
         ? c.base*(1)                                     // contract price is fixed
+        : PIN.has(x.id) ? PIN.get(x.id)
         : Math.max(1, c.base*inflate*Math.exp(C.vol*gauss() - C.vol*C.vol/2));
     });
     /* cutting a contract frees its salary less any penalty: model the penalty as
@@ -1343,7 +1375,8 @@ function fillLeague(V, C, myRoster, priceNoise){
   const infl = 1 + (+el('simInfl').value)/100;
   const pool = V.rows
     .filter(x=> x.lg && (x.lg.fa || (x.expiring && (C.expToFa || x.club===LEAGUE.me))) && !taken.has(x.id))
-    .map(x=>({x, price: Math.max(1, x.est*infl*(priceNoise? Math.exp(0.22*gauss()-0.024):1))}))
+    .map(x=>({x, price: PIN.has(x.id) ? PIN.get(x.id)
+                     : Math.max(1, x.est*infl*(priceNoise? Math.exp(0.22*gauss()-0.024):1))}))
     .sort((a,b)=>b.x.v-a.x.v);
 
   for(let guard=0; guard<400; guard++){
@@ -1351,7 +1384,7 @@ function fillLeague(V, C, myRoster, priceNoise){
     LEAGUE.clubs.forEach(c=>{ if(need[c]>0){ const per=(space[c]-(need[c]-1))/need[c]; if(per>best){best=per;team=c;} } });
     if(!team) break;
     const budget = space[team]-(need[team]-1);
-    const k = pool.findIndex(o=>o.price<=budget);
+    const k = pool.findIndex(o=>o.price<=budget && !(team===LEAGUE.me && OFF.has(o.x.id)));
     if(k<0){ need[team]=0; continue; }
     const o=pool.splice(k,1)[0];
     rosters[team].push({x:o.x, cost:o.price}); space[team]-=o.price; need[team]--;
@@ -1856,6 +1889,7 @@ el('stRosters').addEventListener('click',()=>{ el('standRosters').innerHTML='<di
 el('stPunt').addEventListener('click',()=>{ el('standPunt').innerHTML='<div class="hint">Testing punt strategies against the standings…</div>'; setTimeout(searchPunts,20); });
 el('stSearch').addEventListener('click',()=>{ el('standSearch').innerHTML='<div class="hint">Searching keep/cut combinations… this runs thousands of seasons.</div>'; setTimeout(searchBuild,20); });
 el('stCmp').addEventListener('click',()=>{ el('standCompare').innerHTML='<div class="hint">Comparing…</div>'; setTimeout(compareVariants,20); });
+['scPin','scOff'].forEach(id=>el(id).addEventListener('input',()=>{ parseScenario(); STAND=null; SIM_RESULT=null; renderStandings(); }));
 ['stGames','stSpots','stCap','stSims','stVariant','stExp'].forEach(id=>
   el(id).addEventListener(el(id).type==='checkbox'||el(id).tagName==='SELECT'?'change':'input',()=>{ STAND=null; renderStandings(); }));
 el('simRun').addEventListener('click',()=>{ el('simOut').innerHTML='<div class="hint">Running…</div>'; setTimeout(runSim,20); });
@@ -1900,6 +1934,7 @@ el('statTabs').addEventListener('click',e=>{
   [...el('statTabs').children].forEach(t=>t.setAttribute('aria-pressed', t===b));
   render();
 });
+parseScenario();
 el('method').innerHTML = `
 <p><strong>Data.</strong> ${P.length} players with at least 15 games and 250 minutes in 2025-26, built from 20 seasons of regular-season totals. All production is converted to per-36-minute rates so that changes in playing time and changes in production are modelled separately.</p>
 <p><strong>Model 1 — historical average.</strong> A minute-weighted average of the player's last three seasons, with older seasons decayed by the recency factor λ. It is then aged forward to 2026-27 using an <em>empirical</em> age curve: for every age, the median year-over-year change in each per-36 rate among all players in the dataset with 300+ minutes in back-to-back seasons. Peak per-36 scoring growth sits at ages 19-22 (~+8%/yr), crosses 1.0 around age 25-26, and declines ~4-6%/yr from 30 on.</p>
